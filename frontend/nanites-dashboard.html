@@ -597,7 +597,7 @@
   /* ---------- Sub-tabs ---------- */
   .subtab-row{ display:flex; gap:4px; margin-bottom:14px; flex-wrap:wrap; }
   .subtab{
-    background:#000; border:1px solid var(--border); color:var(--text-muted); padding:6px 14px;
+    background:var(--surface); border:1px solid var(--border); color:var(--text-muted); padding:6px 14px;
     font-size:11px; cursor:pointer; text-transform:uppercase; letter-spacing:.06em; font-family:var(--font-body);
   }
   html[data-theme="claude"] .subtab{ border-radius:999px; text-transform:none; letter-spacing:normal; background:#1f1e1c; font-size:12.5px; }
@@ -618,7 +618,7 @@
   label{ display:block; font-size:10.5px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.06em; margin-bottom:4px; }
   html[data-theme="claude"] label{ text-transform:none; letter-spacing:normal; font-size:12.5px; margin-bottom:6px; }
   input, select{
-    width:100%; background:#000; border:1px solid var(--border); color:var(--text);
+    width:100%; background:var(--surface); border:1px solid var(--border); color:var(--text);
     padding:8px 10px; font-size:12.5px; font-family:var(--font-body);
   }
   html[data-theme="claude"] input, html[data-theme="claude"] select{
@@ -628,7 +628,7 @@
   html[data-theme="claude"] input:focus, html[data-theme="claude"] select:focus{ box-shadow:0 0 0 3px rgba(217,119,87,.18); }
   .field{ margin-bottom:14px; }
   button.btn{
-    background:#000; border:1px solid var(--accent); color:var(--text); padding:9px 20px; font-size:12px;
+    background:var(--surface); border:1px solid var(--accent); color:var(--text); padding:9px 20px; font-size:12px;
     text-transform:uppercase; letter-spacing:.08em; cursor:pointer; font-family:var(--font-body);
   }
   html[data-theme="claude"] button.btn{
@@ -653,7 +653,7 @@
 
   .pager{ display:flex; justify-content:space-between; align-items:center; margin-top:10px; font-size:11px; color:var(--text-muted); }
   html[data-theme="claude"] .pager{ font-size:12.5px; }
-  .pager button{ background:#000; border:1px solid var(--border); color:var(--text-muted); padding:4px 10px; cursor:pointer; font-family:var(--font-body); text-transform:uppercase; }
+  .pager button{ background:var(--surface); border:1px solid var(--border); color:var(--text-muted); padding:4px 10px; cursor:pointer; font-family:var(--font-body); text-transform:uppercase; }
   html[data-theme="claude"] .pager button{ background:#1f1e1c; border-radius:6px; text-transform:none; }
   .pager button:hover{ color:var(--text); border-color:var(--accent); }
 
@@ -687,7 +687,7 @@
     border-radius:9px; background:var(--text-muted); transition:left .15s, background .15s, box-shadow .15s;
   }
   .switch input:checked{ background:var(--accent); border-color:var(--accent); }
-  .switch input:checked::after{ left:25px; background:#fff; }
+  .switch input:checked::after{ left:25px; background:var(--accent-contrast); }
   html[data-theme="claude"] .switch input:focus-visible{ box-shadow:0 0 0 3px rgba(217,119,87,.18); }
 
   /* Phosphor: angular, green, gritty — no rounded corners. */
@@ -2498,6 +2498,24 @@ function applyTheme(theme){
   // forces a synchronous reflow, so the measurement is exact.
   if(theme === 'claude') sizeMascotPlatform();
 }
+// Both toggles were rendered but never wired: applyTheme ran at boot and on
+// profile load, so the buttons in Settings did nothing on click.
+document.querySelectorAll('[data-theme-choice]').forEach(b=>{
+  b.addEventListener('click', ()=>{
+    const choice = b.dataset.themeChoice;
+    if(choice === document.documentElement.getAttribute('data-theme')) return;
+    applyTheme(choice);
+    // Persist to the active profile so the choice survives a restart, the
+    // same way the MCP reports it back on /api/profiles.
+    fetch('/api/settings/profile', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ theme: choice })
+    }).catch(()=>{ /* the UI already reflects the choice; the server just didn't */ });
+  });
+});
+document.querySelectorAll('[data-retro-mode]').forEach(b=>{
+  b.addEventListener('click', ()=> applyRetroMode(b.dataset.retroMode));
+});
 // Boot: mark the active option and show the retro day/night row, so the panel
 // reflects the persisted theme before the user touches anything. The profile
 // load may replace this a moment later.

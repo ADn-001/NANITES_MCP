@@ -122,4 +122,24 @@ describe("theme isolation", () => {
   it("serialises profile switches so a double click fires one request", () => {
     expect(html).toMatch(/grid\.dataset\.switching/);
   });
+
+  it("wires both Settings toggles to a listener", () => {
+    // Both button groups were rendered and styled but had no click handler at
+    // all — applyTheme only ever ran at boot and on profile load, so clicking
+    // a theme or the day/night control did nothing.
+    expect(html).toMatch(
+      /\[data-theme-choice\][\s\S]{0,120}addEventListener\('click'/,
+    );
+    expect(html).toMatch(
+      /addEventListener\('click',\s*\(\)\s*=>\s*applyRetroMode\(b\.dataset\.retroMode\)/,
+    );
+  });
+
+  it("gives every form control the theme surface rather than a black fill", () => {
+    // input/select, .subtab, .btn and .pager all shipped background:#000, so
+    // every text field in the retro profile was a black box.
+    const blackFill = [...style.matchAll(/background:\s*#000\b/g)];
+    expect(blackFill).toEqual([]);
+    expect(html).toMatch(/input, select\{[\s\S]{0,120}background:var\(--surface\)/);
+  });
 });
