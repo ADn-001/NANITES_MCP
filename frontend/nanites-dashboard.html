@@ -2458,6 +2458,10 @@ function applyTheme(theme){
   // forces a synchronous reflow, so the measurement is exact.
   if(theme === 'claude') sizeMascotPlatform();
 }
+// Boot: mark the active option and show the retro day/night row, so the panel
+// reflects the persisted theme before the user touches anything. The profile
+// load may replace this a moment later.
+applyTheme(document.documentElement.getAttribute('data-theme'));
 
 /* ---------- Profile selector + editor load (from /api/profiles + /api/profile) ---------- */
 let themeLoaded = false;
