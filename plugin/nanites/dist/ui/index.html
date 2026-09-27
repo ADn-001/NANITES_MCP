@@ -25,15 +25,18 @@
     --panel-b:#eae6d7;
     --border:#23241f;
     --text:#23241f;
-    --text-muted:#b7b09c;
+    --text-muted:#67614f;
     --accent:#c1440e;
     --accent-contrast:#f2efe4;
     --success:#c1440e;
-    --warn:#b7b09c;
+    --warn:#67614f;
     --danger:#c1440e;
     --radius:0px;
     --signal:#c1440e;
-    --faint:#b7b09c;
+    --faint:#67614f;
+    --surface:#f2efe4;
+    --scrim:rgba(35,36,31,.06);
+    --header-wash:linear-gradient(180deg, rgba(35,36,31,.04), transparent);
     --font-display:ui-monospace,'SF Mono',SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace;
     --font-body:ui-monospace,'SF Mono',SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace;
     --font-mono:ui-monospace,'SF Mono',SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace;
@@ -45,16 +48,19 @@
     --panel-b:#1c1c18;
     --border:#e4e0d1;
     --text:#e4e0d1;
-    --text-muted:#403e35;
+    --text-muted:#8f8a7e;
     --accent:#ff7a3d;
     --accent-contrast:#151512;
     --success:#ff7a3d;
-    --warn:#403e35;
+    --warn:#8f8a7e;
     --danger:#ff7a3d;
     --signal:#ff7a3d;
-    --faint:#403e35;
+    --faint:#8f8a7e;
+    --surface:#151512;
+    --scrim:rgba(0,0,0,.35);
+    --header-wash:linear-gradient(180deg, rgba(255,255,255,.03), transparent);
   }
-  html[data-theme="retro"] body{ font-size:15px; line-height:1.55; letter-spacing:normal; }
+  html[data-theme="retro"] body{ font-size:16px; line-height:1.6; letter-spacing:normal; font-weight:500; }
   html[data-theme="retro"] ::selection{ background:var(--signal); color:var(--bg); }
 
   /* Structure speaks in the chrome register: uppercase, wide tracking, small.
@@ -64,16 +70,35 @@
   html[data-theme="retro"] .btn,
   html[data-theme="retro"] label.f-label,
   html[data-theme="retro"] .theme-option .opt-name{
-    text-transform:uppercase; letter-spacing:.16em; font-size:10px;
+    text-transform:uppercase; letter-spacing:.14em; font-size:11px; font-weight:600;
   }
   html[data-theme="retro"] h1.title,
-  html[data-theme="retro"] .site-header h1{ text-transform:uppercase; letter-spacing:.18em; }
+  html[data-theme="retro"] .site-header h1{
+    text-transform:uppercase; letter-spacing:.18em; font-size:21px; font-weight:700;
+    text-shadow:none;
+  }
+  html[data-theme="retro"] .title-block h1{ text-shadow:none; }
   html[data-theme="retro"] .sub,
-  html[data-theme="retro"] .title-sub{ opacity:.68; letter-spacing:normal; }
+  html[data-theme="retro"] .title-sub{ opacity:.9; letter-spacing:normal; font-size:13.5px; }
 
-  /* Hierarchy comes from opacity, never a second grey. */
-  html[data-theme="retro"] .panel-tag{ opacity:.72; }
-  html[data-theme="retro"] .helper{ font-size:11px; opacity:.6; }
+  /* Hierarchy comes from size and weight; opacity is only a light nudge, because
+     the muted token is already a real ink (5.4:1 on paper) and fading it further
+     is what made the profile hard to read. */
+  html[data-theme="retro"] .panel-tag{ opacity:.92; }
+
+  /* These carry labels and metadata in the shared rules at 10-11px, which is
+     legible on a black terminal and too small on paper. Retro only: the
+     terminal and the modern profile are unchanged. */
+  html[data-theme="retro"] .kv-row{ font-size:13.5px; }
+  html[data-theme="retro"] .kv-row span:first-child{ font-size:11.5px; }
+  html[data-theme="retro"] label{ font-size:11.5px; font-weight:600; }
+  html[data-theme="retro"] .profile-card .pc-name{ font-size:12.5px; font-weight:700; }
+  html[data-theme="retro"] .profile-card .pc-meta{ font-size:11.5px; }
+  html[data-theme="retro"] .profile-card .pc-active{ font-size:10.5px; font-weight:600; }
+  html[data-theme="retro"] input,
+  html[data-theme="retro"] select{ font-size:14px; }
+  html[data-theme="retro"] .panel-title{ font-size:15px; }
+  html[data-theme="retro"] .helper{ font-size:12px; opacity:.85; }
 
   /* Corner brackets: two opposing L-shapes in the signal colour, on the panel
      only. One device marks a container as a discrete unit. */
@@ -105,6 +130,17 @@
   /* The logo mark is a transparent silhouette, so one file tints per theme. */
   html[data-theme="retro"] .brand-mark{ filter:none; }
 
+  /* No soft shadows. The base rules emit an emissive glow from --accent-rgb
+     (correct for phosphor, and the only deliberate exception for claude's
+     focus ring); on e-ink it would read as blur, not light. */
+  html[data-theme="retro"] .title-block h1,
+  html[data-theme="retro"] nav.tabbar button.active,
+  html[data-theme="retro"] .panel-title,
+  html[data-theme="retro"] .pipe-step.active .lbl,
+  html[data-theme="retro"] .dial .val,
+  html[data-theme="retro"] tr.rank-1 td:first-child{ text-shadow:none; }
+  html[data-theme="retro"] tr.rank-1 td:first-child{ color:var(--warn); }
+
   html[data-theme="phosphor"]{
     --bg:#050505;
     --panel-a:rgba(15,45,10,0.22);
@@ -118,6 +154,9 @@
     --warn:#ffb238;
     --danger:#ff4d4d;
     --radius:0px;
+    --surface:#010401;
+    --scrim:rgba(0,0,0,.5);
+    --header-wash:linear-gradient(180deg, rgba(10,30,10,.25), transparent);
     --font-display:'VT323', monospace;
     --font-body:'Share Tech Mono','Courier New', monospace;
     --font-mono:'Share Tech Mono','Courier New', monospace;
@@ -139,11 +178,21 @@
     --warn:#e8a33d;
     --danger:#e5484d;
     --radius:12px;
+    --surface:#1a1a18;
+    --scrim:rgba(26,26,24,.92);
+    --header-wash:linear-gradient(180deg, rgba(242,240,235,.03), transparent);
     --font-display:'Inter',system-ui,sans-serif;
     --font-body:'Inter',system-ui,sans-serif;
     --font-mono:ui-monospace,'SFMono-Regular',Menlo,Consolas,monospace;
     --font-term:ui-monospace,'SFMono-Regular','Cascadia Mono',Consolas,monospace;
   }
+
+  /* Emissive accent, derived per profile. Every glow, halo and focus ring
+     composes from this instead of hardcoding phosphor's green, so a profile
+     can never inherit another profile's glow. */
+  html{ --accent-rgb:193,68,14; }
+  html[data-theme="phosphor"]{ --accent-rgb:57,255,20; }
+  html[data-theme="claude"]{ --accent-rgb:217,119,87; }
 
   *{box-sizing:border-box;}
   /* Hide scrollbar UI (right-edge bar + thumb/"wheel") without disabling scroll — content
@@ -158,13 +207,21 @@
   }
   [data-theme="claude"] body{ font-size:13.5px; letter-spacing:normal; }
 
-  .phos-only{ display:block; }
-  .claude-only{ display:none; }
-  html[data-theme="claude"] .phos-only{ display:none !important; }
-  html[data-theme="claude"] .claude-only{ display:block !important; }
-  span.phos-only, span.claude-only{ display:none; }
-  html[data-theme="phosphor"] span.phos-only{ display:inline !important; }
-  html[data-theme="claude"] span.claude-only{ display:inline !important; }
+  /* Theme-scoped visibility.
+     Each profile owns exactly one of these classes, and a class belonging to
+     some *other* profile must lose to whatever display the element's own rule
+     sets. So the default is hidden and the owning theme opts back in. The list
+     has to be exhaustive: a profile with no rule here silently inherits
+     "visible", which is how the phosphor skull came to render in the retro
+     header. */
+  .phos-only, .claude-only, .retro-only{ display:none !important; }
+  html[data-theme="phosphor"] .phos-only,
+  html[data-theme="claude"] .claude-only,
+  html[data-theme="retro"] .retro-only{ display:revert !important; }
+  /* Inline phrasing elements revert to inline rather than block. */
+  html[data-theme="phosphor"] span.phos-only,
+  html[data-theme="claude"] span.claude-only,
+  html[data-theme="retro"] span.retro-only{ display:inline !important; }
 
   /* ---------- Model test button states ---------- */
   .test-pass{ background:#14532d !important; color:#86efac !important; border-color:#22c55e !important; transition:all .3s ease; }
@@ -184,7 +241,7 @@
   }
   .sweep{
     position:fixed; left:0; right:0; height:160px; pointer-events:none; z-index:81;
-    background:linear-gradient(180deg, transparent, rgba(57,255,20,0.05), transparent);
+    background:linear-gradient(180deg, transparent, rgba(var(--accent-rgb),0.05), transparent);
     animation:sweep 8s linear infinite;
   }
   @keyframes sweep{ 0%{top:-160px;} 100%{top:100vh;} }
@@ -211,34 +268,31 @@
   .site-header{
     border-bottom:2px solid var(--border);
     padding:14px 20px 12px; display:flex; align-items:flex-start; gap:16px;
-    position:relative; z-index:2; background:linear-gradient(180deg, rgba(10,30,10,.25), transparent);
+    position:relative; z-index:2; background:var(--header-wash);
   }
   html[data-theme="claude"] .site-header{
     border-bottom:1px solid var(--border); background:var(--bg); padding:20px 24px 26px; align-items:center;
   }
 
-  .skull-wrap{
-    position:relative; width:88px; height:88px; flex:0 0 auto;
-    filter:drop-shadow(0 0 6px rgba(57,255,20,.65)) drop-shadow(0 0 14px rgba(57,255,20,.3));
+    /* One holder, one box, three marks.
+     Each profile previously had its own arrangement: claude used a
+     fixed-position lockup AND a header spacer (so two logos rendered, the outer
+     one overlapping the nav), phosphor used a larger skull box with a CRT
+     scanline overlay, and retro a differently-sized mark. Same 56px box for all
+     three keeps the title block from shifting when the theme changes. */
+  .brand-mark{ width:56px; height:56px; flex:0 0 auto; }
+  .brand-mark img{
+    width:100%; height:100%; display:block; object-fit:contain;
   }
-  .skull-wrap img{ width:100%; height:100%; object-fit:contain; image-rendering:pixelated; animation:bulb-blink 6.4s infinite; }
-  .skull-wrap::after{
-    content:''; position:absolute; inset:0;
-    background:repeating-linear-gradient(0deg, rgba(0,0,0,0.45) 0px, rgba(0,0,0,0.45) 1px, transparent 2px, transparent 3px);
-    mix-blend-mode:multiply; pointer-events:none; animation:bulb-blink 6.4s infinite;
-  }
+  /* The cursor-evader lives in the resident-card avatars, which keep their own
+     larger treatment; the header slot is a plain mark. */
   @keyframes bulb-blink{
     0%, 84%{ opacity:1; } 84.4%{ opacity:0.15; } 84.8%{ opacity:1; }
     85.6%{ opacity:0.1; } 86%{ opacity:1; } 92%{ opacity:1; }
     92.3%{ opacity:0.2; } 92.6%{ opacity:1; } 100%{ opacity:1; }
   }
 
-  /* Space reserved in the anthropic header so title-block doesn't creep left;
-     the actual mascot+wordmark lockup lives in .mascot-lockup, fixed to the viewport. */
-  .brand-spacer{ width:0; flex:0 0 auto; }
-  html[data-theme="claude"] .brand-spacer{ width:76px; }
-
-  .title-block h1{ font-size:30px; margin:0; line-height:1; text-transform:uppercase; color:var(--text); text-shadow:0 0 4px var(--accent), 0 0 16px rgba(57,255,20,.55); letter-spacing:.03em; }
+  .title-block h1{ font-size:30px; margin:0; line-height:1; text-transform:uppercase; color:var(--text); text-shadow:0 0 4px var(--accent), 0 0 16px rgba(var(--accent-rgb),.55); letter-spacing:.03em; }
   html[data-theme="claude"] .title-block h1{ font-size:24px; text-transform:none; text-shadow:none; font-weight:700; letter-spacing:-.01em; }
   .title-sub{ font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.1em; margin-top:3px; }
   html[data-theme="claude"] .title-sub{ text-transform:none; letter-spacing:normal; font-size:12.5px; margin-top:2px; }
@@ -286,7 +340,7 @@
   /* ---------- Nav + mascot stage ---------- */
   nav.tabbar{
     display:flex; flex-wrap:wrap; gap:2px; border-bottom:1px solid var(--border);
-    padding:0 20px; background:rgba(0,0,0,0.5); position:sticky; top:0; z-index:60;
+    padding:0 20px; background:var(--scrim); position:sticky; top:0; z-index:60;
   }
   html[data-theme="claude"] nav.tabbar{ background:rgba(26,26,24,.92); backdrop-filter:blur(6px); padding:0 24px; gap:4px; }
 
@@ -298,32 +352,9 @@
   }
   html[data-theme="claude"] nav.tabbar button{ text-transform:none; letter-spacing:normal; font-weight:500; font-size:13px; padding:14px 12px 12px; }
   nav.tabbar button:hover{ color:var(--text); }
-  nav.tabbar button.active{ color:var(--text); border-bottom-color:var(--accent); text-shadow:0 0 6px rgba(57,255,20,.6); }
+  nav.tabbar button.active{ color:var(--text); border-bottom-color:var(--accent); text-shadow:0 0 6px rgba(var(--accent-rgb),.6); }
   html[data-theme="claude"] nav.tabbar button.active{ text-shadow:none; font-weight:600; }
   nav.tabbar button svg{ width:15px; height:15px; flex:0 0 auto; }
-
-  /* ---------- Anthropic: mascot + "Nanites" platform, pinned to the viewport top ---------- */
-  /* Fixed to the viewport (not the header) so the gif's top pixel row always meets the
-     screen's top edge with zero gap, regardless of header height or viewport size —
-     the source gifs have particle effects baked into their top frame that look wrong if clipped. */
-  .mascot-lockup{
-    display:none;
-    position:fixed; top:0; left:24px; z-index:150;
-    flex-direction:column; align-items:center; cursor:pointer;
-  }
-  html[data-theme="claude"] .mascot-lockup{ display:flex; }
-  .mascot-gif{ width:64px; height:auto; display:block; image-rendering:auto; }
-  .mascot-platform{
-    background:var(--accent); color:#fff; font-family:var(--font-display);
-    font-weight:700; font-size:12px; letter-spacing:.02em; white-space:nowrap;
-    padding:4px 14px 5px; border-radius:0 0 9px 9px; margin-top:-1px;
-    box-shadow:0 4px 10px rgba(0,0,0,.4);
-  }
-  @media (max-width:520px){
-    .mascot-lockup{ left:8px; }
-    .mascot-gif{ width:48px; }
-    .mascot-platform{ font-size:10px; padding:3px 10px 4px; }
-  }
 
   /* ---------- Phosphor: evasive skull perched ON the navbar's top edge ---------- */
   /* Zone hangs ABOVE the nav (top:-120px) so the skull's bottom edge rests on the
@@ -339,7 +370,7 @@
     position:absolute; left:50%; bottom:0; width:58px; height:auto;
     transform:translate(-50%,0);
     transition:transform .5s cubic-bezier(.22,1,.36,1);
-    filter:drop-shadow(0 0 6px rgba(57,255,20,.5)) drop-shadow(0 0 14px rgba(57,255,20,.25));
+    filter:drop-shadow(0 0 6px rgba(var(--accent-rgb),.5)) drop-shadow(0 0 14px rgba(var(--accent-rgb),.25));
     pointer-events:auto;
   }
   .cog-hover-skull img{ width:100%; height:auto; display:block; animation:skullLevitate 3.6s ease-in-out infinite; }
@@ -358,12 +389,12 @@
   html[data-theme="phosphor"] .resident-card .panel-title{ padding-right:124px; }
   .card-signal-zone{
     position:absolute; top:12px; right:12px; width:112px; height:48px;
-    border:1px dashed var(--border); background:rgba(0,0,0,.25);
+    border:1px dashed var(--border); background:var(--scrim);
     display:flex; align-items:center; justify-content:center;
   }
   .card-skull{
     width:32px; height:auto; image-rendering:pixelated;
-    filter:drop-shadow(0 0 5px rgba(57,255,20,.45));
+    filter:drop-shadow(0 0 5px rgba(var(--accent-rgb),.45));
   }
   /* Anthropic: mascot perched on the card's top edge (feet rest on the border
      line, left side). Each card recolors it via inline filter. */
@@ -400,7 +431,7 @@
   .panel-title{
     font-family:var(--font-display); font-size:19px; text-transform:uppercase; letter-spacing:.06em;
     color:var(--text); margin:0 0 14px; display:flex; justify-content:space-between; align-items:baseline;
-    text-shadow:0 0 4px rgba(57,255,20,.5);
+    text-shadow:0 0 4px rgba(var(--accent-rgb),.5);
   }
   html[data-theme="claude"] .panel-title{ font-size:15px; text-transform:none; letter-spacing:normal; text-shadow:none; font-weight:600; }
   .panel-title::before{ content:'::'; color:var(--border); margin-right:8px; }
@@ -421,7 +452,7 @@
   html[data-theme="claude"] .pipeline{ gap:8px; }
   .pipe-step{
     flex:1; text-align:center; position:relative; padding:10px 4px;
-    border:1px solid var(--border); background:rgba(0,0,0,.4);
+    border:1px solid var(--border); background:var(--scrim);
     clip-path:polygon(0 0,100% 0,100% 100%,8px 100%,0 calc(100% - 8px));
   }
   html[data-theme="claude"] .pipe-step{ clip-path:none; border-radius:10px; background:#1f1e1c; }
@@ -430,9 +461,9 @@
   .pipe-step .lbl{ font-size:11px; text-transform:uppercase; color:var(--text-muted); letter-spacing:.06em; }
   html[data-theme="claude"] .pipe-step .lbl{ text-transform:none; letter-spacing:normal; font-size:12px; }
   .pipe-step .dot{ width:8px; height:8px; border-radius:50%; background:var(--border); margin:0 auto 6px; transition:all .2s ease; }
-  .pipe-step.active .dot{ background:var(--accent); box-shadow:0 0 8px var(--accent), 0 0 16px rgba(57,255,20,.5); }
+  .pipe-step.active .dot{ background:var(--accent); box-shadow:0 0 8px var(--accent), 0 0 16px rgba(var(--accent-rgb),.5); }
   html[data-theme="claude"] .pipe-step.active .dot{ box-shadow:0 0 0 4px rgba(217,119,87,.18); }
-  .pipe-step.active .lbl{ color:var(--text); text-shadow:0 0 5px rgba(57,255,20,.6); }
+  .pipe-step.active .lbl{ color:var(--text); text-shadow:0 0 5px rgba(var(--accent-rgb),.6); }
   html[data-theme="claude"] .pipe-step.active .lbl{ text-shadow:none; font-weight:600; }
   html[data-theme="claude"] .pipe-step.active{ border-color:var(--accent); background:rgba(217,119,87,.08); }
   .pipe-step.done .dot{ background:var(--text-muted); }
@@ -440,7 +471,7 @@
 
   /* ---------- Terminal ---------- */
   .terminal{
-    background:#010401; border:1px solid var(--border); padding:12px 16px; font-size:14px;
+    background:var(--surface); border:1px solid var(--border); padding:12px 16px; font-size:14px;
     line-height:1.6; letter-spacing:.01em; height:260px; overflow-y:auto;
     white-space:pre-wrap; word-break:break-word; position:relative;
     font-family:var(--font-term);
@@ -449,13 +480,13 @@
   html[data-theme="claude"] .terminal{ background:#141413; border-radius:10px; }
   .terminal.scanned::after{
     content:''; position:absolute; inset:0; pointer-events:none;
-    background:repeating-linear-gradient(0deg, rgba(57,255,20,0.03) 0px, rgba(57,255,20,0.03) 1px, transparent 2px, transparent 3px);
+    background:repeating-linear-gradient(0deg, rgba(var(--accent-rgb),0.03) 0px, rgba(var(--accent-rgb),0.03) 1px, transparent 2px, transparent 3px);
   }
   html[data-theme="claude"] .terminal.scanned::after{ content:none; }
 
   /* ---------- /nanites-btw chat mode (a mode of Vox Terminus, §5/§12) ---------- */
   .btw-chat{
-    display:flex; flex-direction:column; background:#010401; border:1px solid var(--border);
+    display:flex; flex-direction:column; background:var(--surface); border:1px solid var(--border);
     font-family:var(--font-term); font-size:14px; height:260px; color:var(--text);
   }
   .btw-chat[hidden]{ display:none; }
@@ -525,7 +556,6 @@
 
   /* Maximize: hide the navbar and both mascots while the panel fills the viewport */
   body.is-maximized nav.tabbar{ display:none !important; }
-  body.is-maximized .mascot-lockup{ display:none !important; }
   body.is-maximized .cog-hover-skull-zone{ display:none !important; }
 
   /* Hamburger nav toggle (mobile / 9:16). Hidden on desktop; on narrow screens it
@@ -550,21 +580,21 @@
 
   /* ---------- Telemetry dials ---------- */
   .dial{
-    border:1px solid var(--border); background:rgba(0,0,0,.35); padding:14px; text-align:center;
+    border:1px solid var(--border); background:var(--scrim); padding:14px; text-align:center;
     clip-path:polygon(0 0,100% 0,100% 100%,8px 100%,0 calc(100% - 8px));
   }
   html[data-theme="claude"] .dial{ clip-path:none; border-radius:var(--radius); background:#1f1e1c; }
-  .dial .val{ font-family:var(--font-display); font-size:34px; color:var(--text); text-shadow:0 0 6px rgba(57,255,20,.6); line-height:1; }
+  .dial .val{ font-family:var(--font-display); font-size:34px; color:var(--text); text-shadow:0 0 6px rgba(var(--accent-rgb),.6); line-height:1; }
   html[data-theme="claude"] .dial .val{ font-size:26px; text-shadow:none; font-weight:700; letter-spacing:-.02em; }
   .dial .lbl{ font-size:10.5px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.1em; margin-top:4px; }
   html[data-theme="claude"] .dial .lbl{ text-transform:none; letter-spacing:normal; font-size:11.5px; }
 
   /* ---------- Gauges ---------- */
-  .gauge-track{ height:16px; border:1px solid var(--border); background:rgba(0,0,0,.6); padding:2px; }
+  .gauge-track{ height:16px; border:1px solid var(--border); background:var(--scrim); padding:2px; }
   html[data-theme="claude"] .gauge-track{ border-radius:999px; background:#141413; height:10px; }
   .gauge-fill{ height:100%; background:repeating-linear-gradient(90deg, var(--accent) 0px, var(--accent) 4px, transparent 4px, transparent 7px); transition:width .4s ease; }
   html[data-theme="claude"] .gauge-fill{ background:linear-gradient(90deg, var(--accent), #e2896b); border-radius:999px; }
-  .kv-row{ display:flex; justify-content:space-between; font-size:12px; padding:5px 0; border-bottom:1px dashed rgba(31,122,14,.4); }
+  .kv-row{ display:flex; justify-content:space-between; font-size:12px; padding:5px 0; border-bottom:1px dashed rgba(var(--accent-rgb),.4); }
   html[data-theme="claude"] .kv-row{ border-bottom:1px solid var(--border); padding:8px 0; }
   .kv-row span:first-child{ color:var(--text-muted); text-transform:uppercase; letter-spacing:.05em; font-size:10.5px; }
   html[data-theme="claude"] .kv-row span:first-child{ text-transform:none; letter-spacing:normal; font-size:12.5px; }
@@ -572,7 +602,7 @@
 
   .status-pill{ font-size:10px; padding:3px 10px; border:1px solid; text-transform:uppercase; letter-spacing:.06em; display:inline-block; }
   html[data-theme="claude"] .status-pill{ border-radius:999px; text-transform:none; letter-spacing:normal; font-size:11px; }
-  .pill-ok{ color:var(--text); border-color:var(--accent); box-shadow:0 0 6px rgba(57,255,20,.3); }
+  .pill-ok{ color:var(--text); border-color:var(--accent); box-shadow:0 0 6px rgba(var(--accent-rgb),.3); }
   html[data-theme="claude"] .pill-ok{ color:#9fd6ab; border-color:#3d5c3f; background:rgba(127,176,105,.14); box-shadow:none; }
   .pill-warn{ color:var(--warn); border-color:var(--warn); }
   html[data-theme="claude"] .pill-warn{ background:rgba(232,163,61,.14); }
@@ -582,11 +612,11 @@
   /* ---------- Sub-tabs ---------- */
   .subtab-row{ display:flex; gap:4px; margin-bottom:14px; flex-wrap:wrap; }
   .subtab{
-    background:#000; border:1px solid var(--border); color:var(--text-muted); padding:6px 14px;
+    background:var(--surface); border:1px solid var(--border); color:var(--text-muted); padding:6px 14px;
     font-size:11px; cursor:pointer; text-transform:uppercase; letter-spacing:.06em; font-family:var(--font-body);
   }
   html[data-theme="claude"] .subtab{ border-radius:999px; text-transform:none; letter-spacing:normal; background:#1f1e1c; font-size:12.5px; }
-  .subtab.active{ color:var(--text); border-color:var(--accent); background:rgba(57,255,20,.07); box-shadow:0 0 6px rgba(57,255,20,.3); }
+  .subtab.active{ color:var(--text); border-color:var(--accent); background:rgba(var(--accent-rgb),.07); box-shadow:0 0 6px rgba(var(--accent-rgb),.3); }
   html[data-theme="claude"] .subtab.active{ background:var(--accent); border-color:var(--accent); color:#fff; box-shadow:none; font-weight:600; }
 
   /* ---------- Tables ---------- */
@@ -594,7 +624,7 @@
   html[data-theme="claude"] table{ font-size:13px; }
   th{ text-align:left; color:var(--text-muted); font-weight:400; padding:7px 8px; border-bottom:1px solid var(--border); text-transform:uppercase; font-size:10px; letter-spacing:.08em; }
   html[data-theme="claude"] th{ text-transform:none; letter-spacing:normal; font-size:11.5px; }
-  td{ padding:8px; border-bottom:1px solid rgba(31,122,14,.35); color:var(--text); }
+  td{ padding:8px; border-bottom:1px solid rgba(var(--accent-rgb),.35); color:var(--text); }
   html[data-theme="claude"] td{ border-bottom:1px solid var(--border); }
   tr.rank-1 td:first-child{ color:var(--warn); text-shadow:0 0 5px rgba(255,178,56,.5); }
   html[data-theme="claude"] tr.rank-1 td:first-child{ color:var(--accent); text-shadow:none; font-weight:700; }
@@ -603,17 +633,17 @@
   label{ display:block; font-size:10.5px; color:var(--text-muted); text-transform:uppercase; letter-spacing:.06em; margin-bottom:4px; }
   html[data-theme="claude"] label{ text-transform:none; letter-spacing:normal; font-size:12.5px; margin-bottom:6px; }
   input, select{
-    width:100%; background:#000; border:1px solid var(--border); color:var(--text);
+    width:100%; background:var(--surface); border:1px solid var(--border); color:var(--text);
     padding:8px 10px; font-size:12.5px; font-family:var(--font-body);
   }
   html[data-theme="claude"] input, html[data-theme="claude"] select{
     background:#141413; border-radius:8px; font-size:13px; padding:9px 11px;
   }
-  input:focus, select:focus{ outline:none; border-color:var(--accent); box-shadow:0 0 6px rgba(57,255,20,.35); }
+  input:focus, select:focus{ outline:none; border-color:var(--accent); box-shadow:0 0 6px rgba(var(--accent-rgb),.35); }
   html[data-theme="claude"] input:focus, html[data-theme="claude"] select:focus{ box-shadow:0 0 0 3px rgba(217,119,87,.18); }
   .field{ margin-bottom:14px; }
   button.btn{
-    background:#000; border:1px solid var(--accent); color:var(--text); padding:9px 20px; font-size:12px;
+    background:var(--surface); border:1px solid var(--accent); color:var(--text); padding:9px 20px; font-size:12px;
     text-transform:uppercase; letter-spacing:.08em; cursor:pointer; font-family:var(--font-body);
   }
   html[data-theme="claude"] button.btn{
@@ -629,7 +659,7 @@
   html[data-theme="claude"] button.btn-danger:hover{ background:#f0625a; box-shadow:none; }
 
   .chart-wrap{ position:relative; height:240px; }
-  .fun-stat{ border:1px solid var(--border); background:rgba(0,0,0,.35); padding:14px; text-align:center; }
+  .fun-stat{ border:1px solid var(--border); background:var(--scrim); padding:14px; text-align:center; }
   html[data-theme="claude"] .fun-stat{ border-radius:var(--radius); background:#1f1e1c; }
   .fun-stat .big{ font-family:var(--font-display); font-size:26px; color:var(--text); }
   html[data-theme="claude"] .fun-stat .big{ font-size:20px; font-weight:700; }
@@ -638,7 +668,7 @@
 
   .pager{ display:flex; justify-content:space-between; align-items:center; margin-top:10px; font-size:11px; color:var(--text-muted); }
   html[data-theme="claude"] .pager{ font-size:12.5px; }
-  .pager button{ background:#000; border:1px solid var(--border); color:var(--text-muted); padding:4px 10px; cursor:pointer; font-family:var(--font-body); text-transform:uppercase; }
+  .pager button{ background:var(--surface); border:1px solid var(--border); color:var(--text-muted); padding:4px 10px; cursor:pointer; font-family:var(--font-body); text-transform:uppercase; }
   html[data-theme="claude"] .pager button{ background:#1f1e1c; border-radius:6px; text-transform:none; }
   .pager button:hover{ color:var(--text); border-color:var(--accent); }
 
@@ -646,7 +676,7 @@
   .theme-toggle-row{ display:flex; gap:10px; flex-wrap:wrap; }
   .theme-option{
     flex:1; min-width:160px; text-align:left; padding:14px; border:1px solid var(--border);
-    background:rgba(0,0,0,.35); color:var(--text-muted); cursor:pointer; font-family:var(--font-body);
+    background:var(--scrim); color:var(--text-muted); cursor:pointer; font-family:var(--font-body);
     clip-path:polygon(0 0,100% 0,100% 100%,8px 100%,0 calc(100% - 8px));
   }
   html[data-theme="claude"] .theme-option{ clip-path:none; border-radius:10px; background:#1f1e1c; }
@@ -654,7 +684,7 @@
   html[data-theme="claude"] .theme-option .opt-name{ text-transform:none; letter-spacing:normal; font-weight:600; font-size:14px; }
   .theme-option .opt-desc{ display:block; font-size:10.5px; color:var(--text-muted); }
   html[data-theme="claude"] .theme-option .opt-desc{ font-size:12px; }
-  .theme-option.active{ border-color:var(--accent); box-shadow:0 0 8px rgba(57,255,20,.25); }
+  .theme-option.active{ border-color:var(--accent); box-shadow:0 0 8px rgba(var(--accent-rgb),.25); }
   html[data-theme="claude"] .theme-option.active{ box-shadow:none; background:rgba(217,119,87,.1); }
   .theme-option.active .opt-name{ color:var(--accent); }
 
@@ -663,22 +693,22 @@
   .switch{ display:inline-block; flex:none; line-height:0; }
   .switch input{
     appearance:none; -webkit-appearance:none; margin:0; cursor:pointer;
-    width:46px; height:24px; border-radius:12px; background:#141413;
+    width:46px; height:24px; border-radius:12px; background:var(--surface);
     border:1px solid var(--border); position:relative; vertical-align:middle;
     transition:background .15s, border-color .15s, box-shadow .15s;
   }
   .switch input::after{
     content:""; position:absolute; top:3px; left:3px; width:18px; height:18px;
-    border-radius:9px; background:#b8b3a8; transition:left .15s, background .15s, box-shadow .15s;
+    border-radius:9px; background:var(--text-muted); transition:left .15s, background .15s, box-shadow .15s;
   }
   .switch input:checked{ background:var(--accent); border-color:var(--accent); }
-  .switch input:checked::after{ left:25px; background:#fff; }
+  .switch input:checked::after{ left:25px; background:var(--accent-contrast); }
   html[data-theme="claude"] .switch input:focus-visible{ box-shadow:0 0 0 3px rgba(217,119,87,.18); }
 
   /* Phosphor: angular, green, gritty — no rounded corners. */
   html[data-theme="phosphor"] .switch input{
     border-radius:0; width:48px; height:22px; border:1px solid var(--accent); background:#0a0f08;
-    box-shadow:inset 0 0 6px rgba(57,255,20,.15);
+    box-shadow:inset 0 0 6px rgba(var(--accent-rgb),.15);
     clip-path:polygon(5px 0,100% 0,100% calc(100% - 5px),calc(100% - 5px) 100%,0 100%,0 5px);
   }
   html[data-theme="phosphor"] .switch input::after{
@@ -687,8 +717,8 @@
     box-shadow:inset 0 0 4px rgba(0,0,0,.6);
   }
   html[data-theme="phosphor"] .switch input:checked{
-    background:rgba(57,255,20,.24); border-color:var(--accent);
-    box-shadow:inset 0 0 8px rgba(57,255,20,.35), 0 0 5px rgba(57,255,20,.25);
+    background:rgba(var(--accent-rgb),.24); border-color:var(--accent);
+    box-shadow:inset 0 0 8px rgba(var(--accent-rgb),.35), 0 0 5px rgba(var(--accent-rgb),.25);
   }
   html[data-theme="phosphor"] .switch input:checked::after{
     left:28px; background:var(--accent); box-shadow:0 0 6px var(--accent), inset 0 0 4px rgba(0,0,0,.55);
@@ -698,19 +728,32 @@
   /* ---------- Active Profile 9:16 cards ---------- */
   .profile-cards{ display:flex; flex-wrap:wrap; gap:12px; }
   .profile-card{
-    width:104px; aspect-ratio:9/16; border:1px solid var(--border); background:rgba(0,0,0,.35);
+    width:104px; aspect-ratio:9/16; border:1px solid var(--border); background:var(--scrim);
     padding:12px 10px; cursor:pointer; display:flex; flex-direction:column; gap:6px; text-align:left;
     transition:border-color .15s, box-shadow .15s;
   }
   html[data-theme="claude"] .profile-card{ background:var(--bg); border-radius:10px; }
-  .profile-card:hover{ border-color:var(--accent); box-shadow:0 0 8px rgba(57,255,20,.2); }
-  .profile-card.active{ border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent), 0 0 10px rgba(57,255,20,.25); }
+  .profile-card:hover{ border-color:var(--accent); box-shadow:0 0 8px rgba(var(--accent-rgb),.2); }
+  .profile-card.active{ border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent), 0 0 10px rgba(var(--accent-rgb),.25); }
   html[data-theme="claude"] .profile-card.active{ box-shadow:inset 0 0 0 1px var(--accent), 0 0 0 3px rgba(217,119,87,.18); }
   .profile-card .pc-name{ font-size:11px; color:var(--text); text-transform:uppercase; letter-spacing:.04em; word-break:break-word; }
   html[data-theme="claude"] .profile-card .pc-name{ text-transform:none; font-weight:600; }
   .profile-card .pc-meta{ font-size:10px; color:var(--text-muted); line-height:1.5; }
   .profile-card .pc-active{ margin-top:auto; font-size:9px; color:var(--accent); text-transform:uppercase; letter-spacing:.06em; }
   html[data-theme="claude"] .profile-card .pc-active{ text-transform:none; font-weight:600; letter-spacing:normal; }
+  /* Switch feedback. Without these the click looked inert: the POST round-trips
+     and the grid redraw is fast enough that a slow switch read as a dead click. */
+  .profile-card{ position:relative; cursor:pointer; transition:border-color .15s ease, opacity .15s ease; }
+  .profile-card.switching{ opacity:.45; pointer-events:none; }
+  .profile-card.switching .pc-name{ opacity:.5; }
+  .profile-card.switching::after{
+    content:"SWITCHING"; position:absolute; right:8px; bottom:8px;
+    font-size:9px; letter-spacing:.16em; color:var(--accent);
+  }
+  .profile-card.switch-failed{ border-color:var(--danger); }
+  html[data-theme="retro"] .profile-card.switching::after{ color:var(--signal); }
+  html[data-theme="retro"] .profile-card:hover,
+  html[data-theme="retro"] .profile-card.active{ box-shadow:none; }
 
   footer.foot{ text-align:center; color:var(--border); font-size:10px; letter-spacing:.18em; text-transform:uppercase; padding:24px 0 40px; }
   html[data-theme="claude"] footer.foot{ text-transform:none; letter-spacing:normal; font-size:12px; color:var(--text-muted); }
@@ -719,28 +762,33 @@
 <body>
 <div class="sweep"></div>
 
-<div class="mascot-lockup claude-only" id="mascotLockup" title="Click me">
-  <img class="mascot-gif" id="mascotGif" src="logo-claude.png" alt="Nanites mascot">
-  <div class="mascot-platform">Nanites</div>
-</div>
-
 <header class="site-header">
-  <div class="skull-wrap phos-only"><img src="skull-idle.png" alt="Nanites signal"></div>
-  <div class="brand-spacer claude-only"></div>
+  <div class="brand-mark phos-only"><img src="logo-phosphor.png" alt="Nanites"></div>
+  <div class="brand-mark retro-only"><img id="retroMark" src="logo-retro-day.png" alt="Nanites"></div>
+  <div class="brand-mark claude-only" id="mascotLockup" title="Click me">
+    <img id="mascotGif" src="logo-claude.png" alt="Nanites">
+  </div>
   <div class="title-block">
     <h1 class="flicker phos-only">NANITES RUNTIME</h1>
+    <h1 class="retro-only">NANITES RUNTIME</h1>
     <h1 class="claude-only">Local Subagent Dashboard</h1>
     <div class="title-sub phos-only">LOCAL SUBAGENT CONTROL &nbsp;//&nbsp; MODEL ORCHESTRATION</div>
+    <div class="title-sub retro-only">Local subagent control &nbsp;//&nbsp; Model orchestration</div>
     <div class="title-sub claude-only">Monitoring local models orchestrated by Nanites</div>
     <div class="boot-lines phos-only">
       &gt; ENDPOINT LINK <span class="ok">ESTABLISHED</span><br>
       &gt; SWARM STATUS: <span class="ok">CALM</span><br>
       &gt; LM-ENDPOINT: <span class="ok">localhost:1234 — RESPONDING</span>
     </div>
+    <div class="boot-lines retro-only">
+      Endpoint <span class="ok">reachable</span><br>
+      Swarm <span class="ok">idle</span><br>
+      LM Studio <span class="ok">localhost:1234</span>
+    </div>
   </div>
   <div class="header-right">
     <div id="clock"></div>
-    <div class="phos-only">PROFILE: <span id="headerProfilePhos" style="color:var(--text)">DEFAULT-RIG</span></div>
+    <div class="phos-only retro-only">PROFILE: <span id="headerProfilePhos" style="color:var(--text)">DEFAULT-RIG</span></div>
     <div class="claude-only">Profile: <span id="headerProfileAnthro" style="color:var(--text)">Default Rig</span></div>
   </div>
 </header>
@@ -751,7 +799,7 @@
   </button>
   <div class="cog-hover-skull-zone phos-only" id="hoverSkullZone">
     <div class="cog-hover-skull" id="hoverSkull">
-      <img id="hoverSkullImg" src="logo-phosphor.png" alt="Nanites signal avatar">
+      <img id="hoverSkullImg" src="skull-idle.png" alt="Nanites signal avatar">
     </div>
   </div>
   <button data-tab="tab-live" class="active">
@@ -793,7 +841,7 @@
   <!-- ===================== TAB 1: LIVE EXECUTION ===================== -->
   <section id="tab-live" class="panel-view active">
     <div class="panel">
-      <p class="panel-title"><span class="phos-only">Run Pipeline</span><span class="claude-only">Execution Pipeline</span> <span class="panel-tag phos-only">TRACKING</span><span class="panel-tag claude-only">Live</span></p>
+      <p class="panel-title"><span class="phos-only">Run Pipeline</span><span class="retro-only">Execution Pipeline</span><span class="claude-only">Execution Pipeline</span> <span class="panel-tag phos-only">TRACKING</span><span class="panel-tag retro-only">Live</span><span class="panel-tag claude-only">Live</span></p>
       <div class="pipeline" id="pipeline">
         <div class="pipe-step" data-step="health"><div class="dot"></div><div class="lbl">Health</div></div>
         <div class="pipe-step" data-step="load"><div class="dot"></div><div class="lbl">Load</div></div>
@@ -808,7 +856,7 @@
         <button class="maximize-btn" id="voxMaximize" aria-label="Maximize">
           <svg class="mx-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg>
         </button>
-        <span class="vox-label"><span class="phos-only">Vox-Terminus</span><span class="claude-only">Event Stream</span></span>
+        <span class="vox-label"><span class="phos-only">Vox-Terminus</span><span class="retro-only">Event Stream</span><span class="claude-only">Event Stream</span></span>
         <span class="panel-tag vox-tag phos-only">STREAMING</span><span class="panel-tag vox-tag claude-only">Streaming</span>
       </p>
       <pre class="terminal scanned" id="liveTerminal"><code></code></pre>
@@ -841,7 +889,7 @@
     <div class="grid-2">
       <div id="residentGrid" class="resident-grid"></div>
       <div class="panel">
-        <p class="panel-title"><span class="phos-only">Concurrency Slots</span><span class="claude-only">Concurrency</span> <span class="panel-tag phos-only">GUARDRAIL</span><span class="panel-tag claude-only">Guardrail</span></p>
+        <p class="panel-title"><span class="phos-only">Concurrency Slots</span><span class="retro-only">Concurrency</span><span class="claude-only">Concurrency</span> <span class="panel-tag phos-only">GUARDRAIL</span><span class="panel-tag retro-only">Guardrail</span><span class="panel-tag claude-only">Guardrail</span></p>
         <div class="kv-row"><span>Tier</span><span id="hwTier">SEQUENTIAL · 1x1 (auto)</span></div>
         <div class="kv-row"><span>Occupancy</span><span id="hwOccupancy">[ SEQUENTIAL · 0/0 OCCUPIED ]</span></div>
         <div class="kv-row"><span>Queue Depth</span><span id="hwQueue">0 waiting</span></div>
@@ -853,7 +901,7 @@
   <!-- ===================== TAB 3: REGISTRY & LEADERBOARDS ===================== -->
   <section id="tab-registry" class="panel-view">
     <div class="panel">
-      <p class="panel-title"><span class="phos-only">Model Registry</span><span class="claude-only">Model Registry</span> <span class="panel-tag phos-only">RANKED</span><span class="panel-tag claude-only">Ranked</span></p>
+      <p class="panel-title"><span class="phos-only">Model Registry</span><span class="retro-only">Model Registry</span><span class="claude-only">Model Registry</span> <span class="panel-tag phos-only">RANKED</span><span class="panel-tag retro-only">Ranked</span><span class="panel-tag claude-only">Ranked</span></p>
       <div class="subtab-row" id="roleTabs"><!-- built dynamically from /api/roles -->
         <button class="subtab active" data-role="all">All-Time</button>
       </div>
@@ -868,7 +916,7 @@
   <!-- ===================== TAB 4: COST & LEDGER ===================== -->
   <section id="tab-cost" class="panel-view">
     <div class="panel">
-      <p class="panel-title"><span class="phos-only">Token Flow</span><span class="claude-only">Token Flow</span> <span class="panel-tag phos-only">ANALYZING</span><span class="panel-tag claude-only">Trend</span></p>
+      <p class="panel-title"><span class="phos-only">Token Flow</span><span class="retro-only">Token Flow</span><span class="claude-only">Token Flow</span> <span class="panel-tag phos-only">ANALYZING</span><span class="panel-tag retro-only">Trend</span><span class="panel-tag claude-only">Trend</span></p>
       <div class="subtab-row" id="rangeTabs">
         <button class="subtab active" data-range="7">Last 7 Days</button>
         <button class="subtab" data-range="30">Last 30 Days</button>
@@ -879,11 +927,11 @@
 
     <div class="grid-2">
       <div class="panel">
-        <p class="panel-title"><span class="phos-only">Calls Per Role</span><span class="claude-only">Calls Per Role</span> <span class="panel-tag phos-only">SPLIT</span><span class="panel-tag claude-only">Split</span></p>
+        <p class="panel-title"><span class="phos-only">Calls Per Role</span><span class="retro-only">Calls Per Role</span><span class="claude-only">Calls Per Role</span> <span class="panel-tag phos-only">SPLIT</span><span class="panel-tag retro-only">Split</span><span class="panel-tag claude-only">Split</span></p>
         <div class="chart-wrap"><canvas id="roleChart"></canvas></div>
       </div>
       <div class="panel">
-        <p class="panel-title"><span class="phos-only">Ledger Digest</span><span class="claude-only">Ledger Digest</span> <span class="panel-tag phos-only">TALLY</span><span class="panel-tag claude-only">Summary</span></p>
+        <p class="panel-title"><span class="phos-only">Ledger Digest</span><span class="retro-only">Ledger Digest</span><span class="claude-only">Ledger Digest</span> <span class="panel-tag phos-only">TALLY</span><span class="panel-tag retro-only">Summary</span><span class="panel-tag claude-only">Summary</span></p>
         <div class="grid-2" style="gap:10px;">
           <div class="fun-stat"><div class="big" id="statModel">granite-4-micro</div><div class="lbl">Most Used Model</div></div>
           <div class="fun-stat"><div class="big" id="statDays">14</div><div class="lbl">Active Days</div></div>
@@ -895,7 +943,7 @@
     </div>
 
     <div class="panel">
-      <p class="panel-title"><span class="phos-only">Call Ledger</span><span class="claude-only">Call Ledger</span> <span class="panel-tag phos-only">SCROLLING</span><span class="panel-tag claude-only">Recent</span></p>
+      <p class="panel-title"><span class="phos-only">Call Ledger</span><span class="retro-only">Call Ledger</span><span class="claude-only">Call Ledger</span> <span class="panel-tag phos-only">SCROLLING</span><span class="panel-tag retro-only">Recent</span><span class="panel-tag claude-only">Recent</span></p>
       <pre class="terminal scanned" id="ledgerTerminal" style="height:220px;"><code></code></pre>
       <div class="pager">
         <span id="pagerInfo">Page 1 of 1</span>
@@ -908,14 +956,14 @@
   <section id="tab-health" class="panel-view">
     <div class="grid-2">
       <div class="panel alert-ok" id="endpointPanel">
-        <p class="panel-title"><span class="phos-only">Endpoint Health</span><span class="claude-only">Endpoint Health</span> <span class="panel-tag phos-only">PINGING</span><span class="panel-tag claude-only">Live</span></p>
+        <p class="panel-title"><span class="phos-only">Endpoint Health</span><span class="retro-only">Endpoint Health</span><span class="claude-only">Endpoint Health</span> <span class="panel-tag phos-only">PINGING</span><span class="panel-tag retro-only">Live</span><span class="panel-tag claude-only">Live</span></p>
         <div class="kv-row"><span>Status</span><span><span class="status-pill pill-ok" id="healthBadge">REACHABLE</span></span></div>
         <div class="kv-row"><span>Ping Latency</span><span id="healthPing">4 ms</span></div>
         <div class="kv-row"><span>Active Profile</span><span><span class="status-pill pill-ok" id="healthActiveProfile">—</span></span></div>
         <div class="kv-row" style="border:none;"><span>Recovery</span><span id="healthRecovery">No autostart needed</span></div>
       </div>
       <div class="panel">
-        <p class="panel-title"><span class="phos-only">ntfy Vox-Cast</span><span class="claude-only">ntfy Notifications</span> <span class="panel-tag phos-only">LISTENING</span><span class="panel-tag claude-only">Live</span></p>
+        <p class="panel-title"><span class="phos-only">ntfy Vox-Cast</span><span class="retro-only">ntfy Notifications</span><span class="claude-only">ntfy Notifications</span> <span class="panel-tag phos-only">LISTENING</span><span class="panel-tag retro-only">Live</span><span class="panel-tag claude-only">Live</span></p>
         <pre class="terminal scanned" id="ntfyTerminal" style="height:190px;"><code></code></pre>
       </div>
     </div>
@@ -924,13 +972,13 @@
   <!-- ===================== TAB 6: SETTINGS ===================== -->
   <section id="tab-settings" class="panel-view">
     <div class="panel">
-      <p class="panel-title"><span class="phos-only">Active Profile</span><span class="claude-only">Active Profile</span> <span class="panel-tag phos-only">SELECT</span><span class="panel-tag claude-only">Select</span></p>
+      <p class="panel-title"><span class="phos-only">Active Profile</span><span class="retro-only">Active Profile</span><span class="claude-only">Active Profile</span> <span class="panel-tag phos-only">SELECT</span><span class="panel-tag retro-only">Select</span><span class="panel-tag claude-only">Select</span></p>
       <p style="font-size:11px; color:var(--text-muted); margin:0 0 12px;">Click a card to make that profile active for the MCP (same as /nanites-switch-profile).</p>
       <div class="profile-cards" id="profileCards"></div>
     </div>
 
     <div class="panel">
-      <p class="panel-title"><span class="phos-only">Forge New Profile</span><span class="claude-only">New Profile</span> <span class="panel-tag phos-only">CREATE</span><span class="panel-tag claude-only">Create</span></p>
+      <p class="panel-title"><span class="phos-only">Forge New Profile</span><span class="retro-only">New Profile</span><span class="claude-only">New Profile</span> <span class="panel-tag phos-only">CREATE</span><span class="panel-tag retro-only">Create</span><span class="panel-tag claude-only">Create</span></p>
       <div class="grid-2" style="gap:12px;">
         <div class="field"><label for="newProfileName">Name</label><input type="text" id="newProfileName" placeholder="my-rig"></div>
         <div class="field"><label for="newProfileUrl">Endpoint URL</label><input type="text" id="newProfileUrl" placeholder="http://localhost:1234"></div>
@@ -941,7 +989,7 @@
     </div>
 
     <div class="panel">
-      <p class="panel-title"><span class="phos-only">Remote Access</span><span class="claude-only">Broadcast</span> <span class="panel-tag phos-only">LAN</span><span class="panel-tag claude-only">LAN</span></p>
+      <p class="panel-title"><span class="phos-only">Remote Access</span><span class="retro-only">Broadcast</span><span class="claude-only">Broadcast</span> <span class="panel-tag phos-only">LAN</span><span class="panel-tag retro-only">LAN</span><span class="panel-tag claude-only">LAN</span></p>
       <label class="switch-row" for="cfgBroadcast">
         <span class="switch"><input type="checkbox" id="cfgBroadcast"></span>
         <span>Broadcast dashboard to the local network</span>
@@ -951,7 +999,7 @@
     </div>
 
     <div class="panel">
-      <p class="panel-title"><span class="retro-only">Interface Aesthetic</span><span class="phos-only">Interface Aesthetic</span><span class="claude-only">Appearance</span> <span class="panel-tag retro-only">DISPLAY</span><span class="panel-tag phos-only">DISPLAY</span><span class="panel-tag claude-only">Display</span></p>
+      <p class="panel-title"><span class="retro-only">Interface Aesthetic</span><span class="phos-only">Interface Aesthetic</span><span class="retro-only">Appearance</span><span class="claude-only">Appearance</span> <span class="panel-tag retro-only">DISPLAY</span><span class="panel-tag phos-only">DISPLAY</span><span class="panel-tag retro-only">Display</span><span class="panel-tag claude-only">Display</span></p>
       <div class="theme-toggle-row" id="themeToggleRow">
         <button class="theme-option" data-theme-choice="retro">
           <span class="opt-name">Retro Instrument</span>
@@ -981,7 +1029,7 @@
 
     <div class="grid-2">
       <div class="panel">
-        <p class="panel-title"><span class="phos-only">Data Wiper</span><span class="claude-only">Data</span> <span class="panel-tag phos-only">CAUTION</span><span class="panel-tag claude-only">Caution</span></p>
+        <p class="panel-title"><span class="phos-only">Data Wiper</span><span class="retro-only">Data</span><span class="claude-only">Data</span> <span class="panel-tag phos-only">CAUTION</span><span class="panel-tag retro-only">Caution</span><span class="panel-tag claude-only">Caution</span></p>
         <div class="field">
           <label>Clear Logs Before</label>
           <input type="date" id="wipeDate">
@@ -993,7 +1041,7 @@
       </div>
 
       <div class="panel">
-        <p class="panel-title"><span class="phos-only">Profile Editor</span><span class="claude-only">Profile</span> <span class="panel-tag phos-only" id="editProfileTagCog">DEFAULT-RIG</span><span class="panel-tag claude-only" id="editProfileTagAnthro">Default Rig</span></p>
+        <p class="panel-title"><span class="phos-only">Profile Editor</span><span class="retro-only">Profile</span><span class="claude-only">Profile</span> <span class="panel-tag phos-only" id="editProfileTagCog">DEFAULT-RIG</span><span class="panel-tag retro-only">Default Rig</span><span class="panel-tag claude-only" id="editProfileTagAnthro">Default Rig</span></p>
         <div class="field" style="margin-bottom:14px;">
           <label for="cfgProfile">Edit Profile</label>
           <select id="cfgProfile"></select>
@@ -1061,18 +1109,18 @@
   <!-- ===================== TAB 7: PROVIDERS ===================== -->
   <section id="tab-providers" class="panel-view">
     <div class="panel">
-      <p class="panel-title"><span class="phos-only">Provider Ordo</span><span class="claude-only">Cloud Providers</span> <span class="panel-tag phos-only">CONFIGURE</span><span class="panel-tag claude-only">Configure</span></p>
+      <p class="panel-title"><span class="phos-only">Provider Ordo</span><span class="retro-only">Cloud Providers</span><span class="claude-only">Cloud Providers</span> <span class="panel-tag phos-only">CONFIGURE</span><span class="panel-tag retro-only">Configure</span><span class="panel-tag claude-only">Configure</span></p>
       <p style="font-size:11px; color:var(--text-muted); margin:0 0 12px;">Global preference order for cloud routing. Drag to reorder. First enabled, non-exhausted provider wins.</p>
       <div id="providerOrderList" style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px;"></div>
     </div>
 
     <div class="panel">
-      <p class="panel-title"><span class="phos-only">Provider Key Vault</span><span class="claude-only">API Keys</span> <span class="panel-tag phos-only">SECURE</span><span class="panel-tag claude-only">Keys</span></p>
+      <p class="panel-title"><span class="phos-only">Provider Key Vault</span><span class="retro-only">API Keys</span><span class="claude-only">API Keys</span> <span class="panel-tag phos-only">SECURE</span><span class="panel-tag retro-only">Keys</span><span class="panel-tag claude-only">Keys</span></p>
       <div id="providerKeysContainer"></div>
     </div>
 
     <div class="panel">
-      <p class="panel-title"><span class="phos-only">Model Registry</span><span class="claude-only">Registered Models</span> <span class="panel-tag phos-only">MODELS</span><span class="panel-tag claude-only">Models</span></p>
+      <p class="panel-title"><span class="phos-only">Model Registry</span><span class="retro-only">Registered Models</span><span class="claude-only">Registered Models</span> <span class="panel-tag phos-only">MODELS</span><span class="panel-tag retro-only">Models</span><span class="panel-tag claude-only">Models</span></p>
       <div id="providerModelsToolbar" style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
         <select id="providerModelFilter" style="flex:1;min-width:120px;">
           <option value="">All providers</option>
@@ -1103,7 +1151,7 @@
     </div>
 
     <div class="panel" id="providerDiscoverPanel" style="display:none;">
-      <p class="panel-title"><span class="phos-only">Model Scryer</span><span class="claude-only">Discover Models</span> <span class="panel-tag phos-only">PROBE</span><span class="panel-tag claude-only">Discover</span></p>
+      <p class="panel-title"><span class="phos-only">Model Scryer</span><span class="retro-only">Discover Models</span><span class="claude-only">Discover Models</span> <span class="panel-tag phos-only">PROBE</span><span class="panel-tag retro-only">Discover</span><span class="panel-tag claude-only">Discover</span></p>
       <div id="providerDiscoverContent"></div>
     </div>
   </section>
@@ -1111,7 +1159,7 @@
   <!-- ===================== TAB 8: ERRORS ===================== -->
   <section id="tab-errors" class="panel-view">
     <div class="panel">
-      <p class="panel-title"><span class="phos-only">Error Scrolls</span><span class="claude-only">Provider Errors</span> <span class="panel-tag phos-only">LOG</span><span class="panel-tag claude-only">Log</span></p>
+      <p class="panel-title"><span class="phos-only">Error Scrolls</span><span class="retro-only">Provider Errors</span><span class="claude-only">Provider Errors</span> <span class="panel-tag phos-only">LOG</span><span class="panel-tag retro-only">Log</span><span class="panel-tag claude-only">Log</span></p>
       <div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;align-items:center;">
         <select id="errorProviderFilter" style="min-width:130px;">
           <option value="">All providers</option>
@@ -2191,7 +2239,9 @@ document.getElementById('roleTabs').addEventListener('click', e=>{
 })();
 
 /* ---------- Cost & ledger charts ---------- */
-Chart.defaults.font.family = "'Share Tech Mono', monospace";
+/* Font is re-read from --font-body on every theme switch in restyleCharts();
+   this is only the pre-boot default. */
+Chart.defaults.font.family = "ui-monospace, monospace";
 
 function renderStat(id, text){ const el = document.getElementById(id); if(el) el.textContent = text; }
 async function refreshLedger(range){
@@ -2229,13 +2279,13 @@ let tokenChart = new Chart(tokenCtx, {
   data:{ labels:[], datasets:[{
     label:'Tokens processed locally',
     data:[],
-    borderColor:'#39ff14', backgroundColor:'rgba(57,255,20,0.12)',
+    borderColor:themeColors().accent, backgroundColor:'rgba(' + themeColors().accentRgb + ',0.12)',
     pointRadius:0, borderWidth:1.5, fill:true, tension:.25
   }]},
   options:{ responsive:true, maintainAspectRatio:false,
     plugins:{ legend:{display:false} },
-    scales:{ x:{ grid:{color:'rgba(31,122,14,0.2)'}, ticks:{color:'#2fae14'} },
-             y:{ grid:{color:'rgba(31,122,14,0.2)'}, ticks:{color:'#2fae14'} } }
+    scales:{ x:{ grid:{color:'rgba(' + themeColors().accentRgb + ',0.2)'}, ticks:{color:themeColors().muted} },
+             y:{ grid:{color:'rgba(' + themeColors().accentRgb + ',0.2)'}, ticks:{color:themeColors().muted} } }
   }
 });
 document.getElementById('rangeTabs').addEventListener('click', e=>{
@@ -2251,24 +2301,41 @@ let roleChart = new Chart(roleCtx, {
   type:'doughnut',
   data:{ labels:[], datasets:[{
     data:[],
-    backgroundColor:['#39ff14','#1f7a0e','#c8ffb8'],
+    backgroundColor:(function(){const C=themeColors();return [C.accent, C.muted, C.text];})(),
     borderColor:'#050505', borderWidth:2
   }]},
   options:{ responsive:true, maintainAspectRatio:false,
-    plugins:{ legend:{ position:'bottom', labels:{ boxWidth:10, color:'#2fae14' } } }
+    plugins:{ legend:{ position:'bottom', labels:{ boxWidth:10, color:themeColors().muted } } }
   }
 });
 
 /* ---------- Theme-aware chart restyling ---------- */
+/* Chart colours and fonts come from the active profile's resolved tokens. This
+   used to branch on a two-value theme test, so a third profile fell into the
+   phosphor arm and drew green charts on paper. Reading the tokens means a new
+   profile needs no change here at all. */
+function themeColors(){
+  const cs = getComputedStyle(document.documentElement);
+  const v = (n, fallback) => (cs.getPropertyValue(n).trim() || fallback);
+  return {
+    accent:  v('--accent', '#c1440e'),
+    text:    v('--text', '#23241f'),
+    muted:   v('--text-muted', '#b7b09c'),
+    bg:      v('--bg', '#f2efe4'),
+    accentRgb: v('--accent-rgb', '193,68,14'),
+    font:    v('--font-body', 'monospace'),
+  };
+}
+
 function restyleCharts(theme){
-  const isAnthro = theme === 'anthropic';
-  const gridColor = isAnthro ? 'rgba(255,255,255,0.07)' : 'rgba(31,122,14,0.2)';
-  const tickColor = isAnthro ? '#a39e95' : '#2fae14';
-  const lineColor = isAnthro ? '#d97757' : '#39ff14';
-  const lineFill  = isAnthro ? 'rgba(217,119,87,0.15)' : 'rgba(57,255,20,0.12)';
-  const doughnut  = isAnthro ? ['#d97757','#a35a41','#f0b79a'] : ['#39ff14','#1f7a0e','#c8ffb8'];
-  const doughnutBorder = isAnthro ? '#1a1a18' : '#050505';
-  const fontFamily = isAnthro ? "'Inter', system-ui, sans-serif" : "'Share Tech Mono', monospace";
+  const C = themeColors();
+  const gridColor = `rgba(${C.accentRgb},0.2)`;
+  const tickColor = C.muted;
+  const lineColor = C.accent;
+  const lineFill  = `rgba(${C.accentRgb},0.12)`;
+  const doughnut  = [C.accent, C.muted, C.text];
+  const doughnutBorder = C.bg;
+  const fontFamily = C.font;
 
   Chart.defaults.font.family = fontFamily;
 
@@ -2414,6 +2481,10 @@ document.getElementById('saveProfileBtn').addEventListener('click', async ()=>{
 });
 
 /* ---------- Theme toggle (persisted to the active profile) ---------- */
+// Set once the user picks a theme in Settings; until then the active
+// profile decides it.
+let themeChosenByUser = false;
+
 const RETRO_MODES = ['day','night'];
 const RETRO_MODE_KEY = 'nanites.retroMode';
 function readRetroMode(){
@@ -2424,6 +2495,12 @@ function readRetroMode(){
 }
 function applyRetroMode(mode){
   document.documentElement.setAttribute('data-mode', mode);
+  // The retro mark is a separate file per mode: the day ink is a deep
+  // signal red on paper, the night ink a lighter orange on near-black. One
+  // file tinted by CSS cannot serve both, because the day tint is chosen for
+  // contrast against paper and the night tint against black.
+  const mark = document.getElementById('retroMark');
+  if(mark) mark.src = mode === 'night' ? 'logo-retro-night.png' : 'logo-retro-day.png';
   try{ localStorage.setItem(RETRO_MODE_KEY, mode); }catch{ /* private mode */ }
   updateRetroToggle(mode);
 }
@@ -2446,9 +2523,31 @@ function applyTheme(theme){
   // forces a synchronous reflow, so the measurement is exact.
   if(theme === 'claude') sizeMascotPlatform();
 }
+// Both toggles were rendered but never wired: applyTheme ran at boot and on
+// profile load, so the buttons in Settings did nothing on click.
+document.querySelectorAll('[data-theme-choice]').forEach(b=>{
+  b.addEventListener('click', ()=>{
+    const choice = b.dataset.themeChoice;
+    if(choice === document.documentElement.getAttribute('data-theme')) return;
+    applyTheme(choice);
+    themeChosenByUser = true;
+    // Persist to the active profile so the choice survives a restart, the
+    // same way the MCP reports it back on /api/profiles.
+    fetch('/api/settings/profile', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ theme: choice })
+    }).catch(()=>{ /* the UI already reflects the choice; the server just didn't */ });
+  });
+});
+document.querySelectorAll('[data-retro-mode]').forEach(b=>{
+  b.addEventListener('click', ()=> applyRetroMode(b.dataset.retroMode));
+});
+// Boot: mark the active option and show the retro day/night row, so the panel
+// reflects the persisted theme before the user touches anything. The profile
+// load may replace this a moment later.
+applyTheme(document.documentElement.getAttribute('data-theme'));
 
 /* ---------- Profile selector + editor load (from /api/profiles + /api/profile) ---------- */
-let themeLoaded = false;
 function titleCase(s){ return (s||'—').replace(/\b\w/g, c=>c.toUpperCase()); }
 function setActiveProfileLabel(name){
   const label = name || '—';
@@ -2521,18 +2620,25 @@ async function loadEditorProfile(name){
     if(!res.ok) return;
     const data = await res.json();
     fillEditorFields(data.profile);
-    if(data.profile?.theme && !themeLoaded){ applyTheme(data.profile.theme); themeLoaded = true; }
+    // Follow the profile's theme until the user picks one. The old latch
+    // latched on the first load, so switching to another profile left the UI
+    // on the previous profile's theme while the server reported the new one.
+    if(data.profile?.theme && !themeChosenByUser){
+      applyTheme(data.profile.theme);
+    }
   } catch {}
 }
-async function loadProfileSelector(){
+async function loadProfileSelector(preferName){
   try {
     const res = await fetch('/api/profiles');
     if(!res.ok) return;
     const { active, profiles } = await res.json();
+    if(!profiles.length) return;
     const sel = document.getElementById('cfgProfile');
-    sel.innerHTML = profiles.map(p=>`<option value="${p.name}"${p.name===active?' selected':''}>${p.name}</option>`).join('');
+    const target = profiles.some(p=>p.name===preferName) ? preferName : (active || profiles[0].name);
+    sel.innerHTML = profiles.map(p=>`<option value="${p.name}"${p.name===target?' selected':''}>${p.name}</option>`).join('');
     setActiveProfileLabel(active);
-    await loadEditorProfile(active || (profiles[0] && profiles[0].name));
+    await loadEditorProfile(target);
   } catch {}
 }
 document.getElementById('cfgProfile').addEventListener('change', ()=>{ loadEditorProfile(document.getElementById('cfgProfile').value); });
@@ -2560,13 +2666,35 @@ async function refreshProfileCards(){
     card.addEventListener('click', async ()=>{
       const name = card.dataset.name;
       if(name === active) return;
+      // A switch in flight must not be re-enterable: the old code fired a
+      // second POST on a fast double-click and the two raced, leaving the
+      // grid showing whichever response landed last.
+      if(grid.dataset.switching) return;
+      grid.dataset.switching = name;
+      card.classList.add('switching');
       try {
         const res = await fetch('/api/settings/profile/switch', {
           method:'POST', headers:{'Content-Type':'application/json'},
           body: JSON.stringify({ name })
         });
-        if(res.ok){ await refreshProfileCards(); await loadProfileSelector(); }
-      } catch {}
+        if(res.ok){
+          setActiveProfileLabel(name);
+          await refreshProfileCards();
+          await loadProfileSelector(name);
+        } else {
+          const body = await res.json().catch(()=>({}));
+          card.classList.add('switch-failed');
+          setTimeout(()=>card.classList.remove('switch-failed'), 1200);
+          flashSave(body.message || 'Profile switch failed.', true);
+        }
+      } catch {
+        card.classList.add('switch-failed');
+        setTimeout(()=>card.classList.remove('switch-failed'), 1200);
+        flashSave('Profile switch failed (network).', true);
+      } finally {
+        delete grid.dataset.switching;
+        card.classList.remove('switching');
+      }
     });
   });
 }
@@ -2597,8 +2725,14 @@ document.getElementById('deleteProfileBtn').addEventListener('click', async ()=>
   const sel = document.getElementById('cfgProfile');
   const name = sel ? sel.value : null;
   if(!name){ return; }
-  if(name === document.getElementById('headerProfilePhos').textContent.toLowerCase() ||
-     name === document.getElementById('headerProfileAnthro').textContent.toLowerCase()){
+  // Compare against the server's active name, not the display label — the
+  // labels are upper/title-cased per profile and never match the raw name.
+  let activeName = null;
+  try {
+    const r = await fetch('/api/profiles');
+    if(r.ok) ({ active: activeName } = await r.json());
+  } catch {}
+  if(name === activeName){
     flashSave('Cannot delete the active profile — switch to another first.', true); return;
   }
   if(!confirm('Delete profile "' + name + '" permanently? This cannot be undone.')) return;
@@ -2776,7 +2910,7 @@ function buildResidentCards(){
     <div class="panel resident-card alert-${m.level}" data-resident="${m.id}">
       <div class="card-signal-zone phos-only"><img class="card-skull" src="${SKULL_IDLE_SRC}" alt="Nanites signal avatar"></div>
       <img class="card-modern-mascot claude-only" src="${MASCOT_IDLE_SRC}" alt="Nanites mascot" style="filter:${tint}">
-      <p class="panel-title"><span class="phos-only">Resident Unit</span><span class="claude-only">Resident Model</span> <span class="panel-tag phos-only">MONITORING</span><span class="panel-tag claude-only">Live</span></p>
+      <p class="panel-title"><span class="phos-only">Resident Unit</span><span class="retro-only">Resident Model</span><span class="claude-only">Resident Model</span> <span class="panel-tag phos-only">MONITORING</span><span class="panel-tag retro-only">Live</span><span class="panel-tag claude-only">Live</span></p>
       <div class="kv-row"><span>Model ID</span><span>${m.id}</span></div>
       <div class="kv-row"><span>Quantization</span><span>${m.quant}</span></div>
       <div class="kv-row"><span>Context Length</span><span>${ctxLabel}</span></div>
@@ -2829,14 +2963,7 @@ function setupCardEvader(zone, skull){
    Ground line sits 21.9% above the gif frame's bottom (feet at row ~249 of 320); the
    strip below it is empty, so the platform overlaps that strip instead of hanging
    below the frame. ---------- */
-function sizeMascotPlatform(){
-  const gif = document.getElementById('mascotGif');
-  const plat = document.querySelector('.mascot-platform');
-  if(gif && plat && gif.clientHeight){
-    const pull = Math.max(0, Math.round(gif.clientHeight * 0.219));
-    plat.style.marginTop = '-' + pull + 'px';
-  }
-}
+function sizeMascotPlatform(){ /* the mark is a fixed-size box; nothing to measure */ }
 /* Inline base64 gif's load event already fired before this script, and end-of-body
    scripts run before first layout, so clientHeight is 0 until a theme switch or
    resize (applyTheme calls sizeMascotPlatform synchronously for anthropic). */

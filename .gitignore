@@ -5,8 +5,8 @@ dist/
 .nanites/
 coverage/
 frontend/*.gif
-# Logos are original product art and must ship.
-frontend/logo-*.png
+frontend/*.jpg
+frontend/*.jpeg
 graphify-out/
 
 # Machine-local Claude Code state. Claude Code writes live session permissions
