@@ -947,16 +947,22 @@ async function handleProviderModels(deps, req, res) {
 }
 async function handleProviderModelOp(deps, req, res, op) {
     const url = new URL(req.url ?? "/", "http://localhost");
-    const provParam = url.searchParams.get("provider") ?? "";
+    // Every other provider route takes its arguments from a JSON body, and the
+    // bulk "register selected" path in the dashboard posts a body. This handler
+    // read only the query string, so every one of those registrations came back
+    // 400 "provider query param required" while the manual path — which does
+    // build a query string — kept working. Accept both so neither caller breaks.
+    const body = (await readJsonBody(req));
+    const provParam = body?.provider ?? url.searchParams.get("provider") ?? "";
     if (!provParam)
-        return sendError(res, 400, "bad_request", "provider query param required", false);
+        return sendError(res, 400, "bad_request", "provider required (body or query param)", false);
     const prov = validateProvider(provParam);
-    const modelId = url.searchParams.get("model_id") ?? "";
+    const modelId = body?.model_id ?? url.searchParams.get("model_id") ?? "";
     if (!modelId)
-        return sendError(res, 400, "bad_request", "model_id query param required", false);
+        return sendError(res, 400, "bad_request", "model_id required (body or query param)", false);
     const { profileName, modelStore } = providerDeps(deps);
     if (op === "register") {
-        const nickname = url.searchParams.get("nickname") ?? undefined;
+        const nickname = body?.nickname ?? url.searchParams.get("nickname") ?? undefined;
         modelStore.registerModel(profileName, prov, modelId, modelId, undefined, nickname);
         return sendJson(res, 200, { provider: prov, model_id: modelId, nickname: nickname ?? null });
     }

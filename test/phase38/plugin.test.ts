@@ -408,6 +408,90 @@ describe("Dashboard serves all required tabs", () => {
     cleanup(h.deps.home);
   });
 
+  /**
+   * The register route is the only provider endpoint that ever took its
+   * arguments from the query string while every sibling read a JSON body. The
+   * dashboard's bulk "register selected" path posts a body, so all twenty
+   * discovered models came back 400 "provider query param required" — and
+   * because the frontend only counted non-OK responses, it reported the
+   * failure without ever showing what went wrong. The manual path kept working
+   * because it does build a query string, which is why this went unnoticed.
+   */
+  it("accepts a JSON body on the register route, not just a query string", async () => {
+    const h = await setup();
+
+    await fetch(`${h.base}/api/providers/keys`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "generic", api_key: "sk-test" }),
+    });
+
+    const res = await fetch(`${h.base}/api/providers/models/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "generic", model_id: "body/model", nickname: "From body" }),
+    });
+    expect(res.status).toBe(200);
+    const data = await res.json() as { model_id: string; nickname: string | null };
+    expect(data.model_id).toBe("body/model");
+    expect(data.nickname).toBe("From body");
+
+    const listRes = await fetch(`${h.base}/api/providers/models?provider=generic`);
+    const listData = await listRes.json() as { models: Array<{ model_id: string; nickname: string | null }> };
+    const found = listData.models.filter(m => m.model_id === "body/model");
+    expect(found.length).toBe(1);
+    expect(found[0]!.nickname).toBe("From body");
+
+    await h.ui.close();
+    h.deps.close();
+    await h.mock.close();
+    cleanup(h.deps.home);
+  });
+
+  it("still validates the register route and still accepts a bodyless DELETE", async () => {
+    const h = await setup();
+
+    await fetch(`${h.base}/api/providers/keys`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "generic", api_key: "sk-test" }),
+    });
+
+    // Accepting a body must not turn the missing-argument case into a 500.
+    const noProvider = await fetch(`${h.base}/api/providers/models/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model_id: "x" }),
+    });
+    expect(noProvider.status).toBe(400);
+
+    const noModel = await fetch(`${h.base}/api/providers/models/register?provider=generic`, {
+      method: "POST",
+    });
+    expect(noModel.status).toBe(400);
+
+    const badProvider = await fetch(`${h.base}/api/providers/models/register?provider=bogus&model_id=x`, {
+      method: "POST",
+    });
+    expect(badProvider.status).toBe(400);
+
+    // DELETE carries no body, so the handler must fall back to the query.
+    await fetch(`${h.base}/api/providers/models/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "generic", model_id: "gone/model" }),
+    });
+    const del = await fetch(`${h.base}/api/providers/models?provider=generic&model_id=${encodeURIComponent("gone/model")}`, {
+      method: "DELETE",
+    });
+    expect(del.status).toBe(200);
+
+    await h.ui.close();
+    h.deps.close();
+    await h.mock.close();
+    cleanup(h.deps.home);
+  });
+
   it("handles model registration with nicknames", async () => {
     const h = await setup();
 

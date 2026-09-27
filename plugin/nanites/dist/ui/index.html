@@ -744,6 +744,22 @@
   /* Switch feedback. Without these the click looked inert: the POST round-trips
      and the grid redraw is fast enough that a slow switch read as a dead click. */
   .profile-card{ position:relative; cursor:pointer; transition:border-color .15s ease, opacity .15s ease; }
+
+  /* Discovery rows. The row was display:flex, so the two auto-width spans
+     absorbed all the free space and pushed the checkbox into the middle of
+     the row. A grid with a fixed control column keeps the tick where the eye
+     expects it and lets the long model ids ellipsise instead of stretching. */
+  .discover-row{
+    display:grid; grid-template-columns:auto minmax(0,1fr) auto;
+    align-items:center; gap:8px; padding:6px 8px; cursor:pointer; font-size:12px;
+    background:var(--panel-a); border:1px solid var(--border); border-radius:var(--radius);
+  }
+  .discover-row:hover{ border-color:var(--accent); }
+  .discover-row input[type="checkbox"]{
+    flex:none; width:14px; height:14px; margin:0; cursor:pointer; justify-self:start;
+  }
+  .discover-name{ font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+  .discover-meta{ font-size:10px; color:var(--text-muted); white-space:nowrap; text-align:right; }
   .profile-card.switching{ opacity:.45; pointer-events:none; }
   .profile-card.switching .pc-name{ opacity:.5; }
   .profile-card.switching::after{
@@ -1950,14 +1966,14 @@ window.discoverModels = async function(){
     providerState.discovery = data.models;
     content.innerHTML = `<p style="font-size:11px;color:var(--text-muted);margin:0 0 10px;">Select models to register (${data.models.length} found):</p>
       <div style="display:flex;flex-direction:column;gap:6px;max-height:300px;overflow-y:auto;">
-        ${data.models.map(m => `<label style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--panel-bg);border:1px solid var(--border);border-radius:6px;cursor:pointer;font-size:12px;">
+        ${data.models.map(m => `<label class="discover-row">
           <input type="checkbox" data-model-id="${m.id}" data-provider="${m.provider}" checked>
-          <span style="font-weight:500;">${m.name}</span>
-          <span style="font-size:10px;color:var(--text-muted);">${m.provider} · ctx ${m.context_length ? m.context_length.toLocaleString() : '?'}</span>
+          <span class="discover-name" title="${m.name}">${m.name}</span>
+          <span class="discover-meta">${m.provider} · ctx ${m.context_length ? m.context_length.toLocaleString() : '?'}</span>
         </label>`).join('')}
       </div>
       <div style="display:flex;gap:8px;margin-top:10px;">
-        <button class="btn" onclick="registerSelectedModels()">Register Selected</button>
+        <button class="btn" id="registerSelectedBtn" onclick="registerSelectedModels()">Register Selected</button>
         <button class="btn" style="margin-left:auto;" onclick="closeDiscoverPanel()">Cancel</button>
       </div>`;
   } catch(err) {
@@ -1978,7 +1994,10 @@ window.registerSelectedModels = async function(){
   if(!content) return;
   const checkboxes = [...content.querySelectorAll('input[type="checkbox"]:checked')];
   if(!checkboxes.length) return;
+  const btn = document.getElementById('registerSelectedBtn');
+  if(btn) btn.disabled = true;
   let failures = 0;
+  const failedIds = [];
   for(const cb of checkboxes){
     const provider = cb.dataset.provider;
     const modelId = cb.dataset.modelId;
@@ -1988,13 +2007,27 @@ window.registerSelectedModels = async function(){
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider, model_id: modelId }),
       });
-      if(!res.ok) failures++;
-    } catch { failures++; }
+      if(!res.ok){
+        failures++;
+        failedIds.push(modelId);
+        console.warn('register failed', modelId, res.status, await res.text().catch(()=>''));
+      }
+    } catch (err) {
+      failures++;
+      failedIds.push(modelId);
+      console.warn('register threw', modelId, err);
+    }
   }
+  if(btn) btn.disabled = false;
   closeDiscoverPanel();
+  // Replace the previous notice rather than inserting another, so repeated
+  // attempts stack up one line instead of a wall of duplicates.
+  const el = document.getElementById('providerRegisterNotice');
+  if(el) el.remove();
   if(failures > 0){
-    const el = document.getElementById('providerModelsContainer');
-    if(el) el.insertAdjacentHTML('beforebegin', `<p style="font-size:11px;color:#f59e0b;margin:4px 0;">${failures} model(s) failed to register.</p>`);
+    const anchor = document.getElementById('providerModelsContainer');
+    if(anchor) anchor.insertAdjacentHTML('beforebegin',
+      `<p id="providerRegisterNotice" style="font-size:11px;color:var(--danger);margin:4px 0;">${failures} of ${checkboxes.length} model(s) failed to register: ${failedIds.slice(0,3).join(', ')}${failedIds.length>3?'…':''}</p>`);
   }
   await refreshProviders();
 };
