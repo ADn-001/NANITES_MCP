@@ -5,7 +5,7 @@
  * with it or every image 404s at runtime. Cross-platform (no shell globbing):
  * Node's fs does the copying.
  */
-import { copyFileSync, mkdirSync, readdirSync } from "node:fs";
+import { copyFileSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -24,5 +24,21 @@ const ASSET_PATTERN = /\.(png|gif|jpg|jpeg|svg|webp|ico)$/i;
 const assets = readdirSync(srcDir).filter((f) => ASSET_PATTERN.test(f));
 for (const name of assets) {
   copyFileSync(path.join(srcDir, name), path.join(destDir, name));
+}
+
+// Mirror the assets, don't accumulate them. copyFileSync only ever adds, so a
+// renamed or deleted asset stayed in dist/ui forever and shipped in the plugin
+// package — logo-retro.png outlived its source by a release.
+//
+// Only image assets are pruned. dist/ui also holds the compiled UI server
+// (main.js, server.js, lifecycle.js, openSession.js, autostart.js) written
+// there by tsc; deleting anything that merely "isn't a copied asset" takes the
+// server with it.
+const keep = new Set([...assets, path.basename(dest)]);
+for (const stale of readdirSync(destDir)) {
+  if (ASSET_PATTERN.test(stale) && !keep.has(stale)) {
+    rmSync(path.join(destDir, stale));
+    process.stdout.write(`removed stale dist/ui/${stale}\n`);
+  }
 }
 process.stdout.write(`copied ${assets.length} UI asset(s) -> dist/ui/\n`);

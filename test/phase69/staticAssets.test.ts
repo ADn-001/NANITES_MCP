@@ -9,7 +9,7 @@
  * are served, and the route cannot be walked out of its directory.
  */
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { buildDeps, type ToolDeps } from "../../src/tools/deps.js";
@@ -137,5 +137,55 @@ describe("assets referenced by the dashboard are tracked", () => {
   it.each([...referenced])("%s is tracked by git", (name) => {
     const rel = `frontend/${name}`;
     expect(tracked.has(rel), `${rel} is referenced by the dashboard but is not committed`).toBe(true);
+  });
+});
+
+/**
+ * dist/ui is what the plugin actually serves, and copy-ui.mjs used to only
+ * ever add files to it. A renamed or deleted asset therefore survived in the
+ * build output indefinitely: logo-retro.png outlived its source by a release,
+ * alongside four orphaned server modules, and all of it shipped in the package.
+ *
+ * So the check is that the two directories agree — not merely that every
+ * referenced asset is present, which a stale extra file passes.
+ */
+describe("the built UI directory mirrors its source", () => {
+  const asset = /\.(png|gif|jpg|jpeg|svg|webp|ico)$/i;
+  const list = (dir: string) =>
+    readdirSync(path.resolve(import.meta.dirname, "..", "..", dir))
+      .filter((f) => asset.test(f))
+      .sort();
+
+  it("has no asset in dist/ui that frontend no longer has", () => {
+    const orphans = readdirSync(
+      path.resolve(import.meta.dirname, "..", "..", "dist", "ui"),
+    ).filter((f) => asset.test(f) && !list("frontend").includes(f));
+    expect(
+      orphans,
+      `stale in dist/ui, absent from frontend: ${orphans.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  it("has no asset in the plugin build that frontend no longer has", () => {
+    const orphans = readdirSync(
+      path.resolve(import.meta.dirname, "..", "..", "plugin", "nanites", "dist", "ui"),
+    ).filter((f) => asset.test(f) && !list("frontend").includes(f));
+    expect(
+      orphans,
+      `stale in plugin/nanites/dist/ui: ${orphans.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  it("carries every frontend asset into both build outputs", () => {
+    const src = list("frontend");
+    expect(src.length).toBeGreaterThan(0);
+    expect(list("dist/ui")).toEqual(src);
+    expect(
+      readdirSync(
+        path.resolve(import.meta.dirname, "..", "..", "plugin", "nanites", "dist", "ui"),
+      )
+        .filter((f) => asset.test(f))
+        .sort(),
+    ).toEqual(src);
   });
 });
