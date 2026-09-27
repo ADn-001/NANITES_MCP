@@ -2,3 +2,23 @@
 # frontmatter, byte-identity, drift) assert exact LF strings; core.autocrlf on
 # Windows was turning them CRLF in fresh checkouts and breaking those suites.
 *.md text eol=lf
+
+# The same reasoning covers every shipped source and build artifact. The plugin
+# serves plugin/nanites/dist/**/*.js directly, so a CRLF checkout would ship
+# text that never passed the suites it is supposed to mirror.
+*.ts   text eol=lf
+*.js   text eol=lf
+*.mjs  text eol=lf
+*.json text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.html text eol=lf
+*.css  text eol=lf
+
+# Binary: never touched by line-ending conversion.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.webp binary
+*.ico  binary
