@@ -1,0 +1,14 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "nanites-dashboard",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["scripts/ui-attach-or-start.mjs"],
+      "url": "http://localhost:4700",
+      "port": 4700,
+      "autoPort": false,
+      "cwd": "."
+    }
+  ]
+}

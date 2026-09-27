@@ -1,0 +1,39 @@
+node_modules/
+dist/
+*.log
+.env
+.nanites/
+coverage/
+frontend/*.gif
+# Logos are original product art and must ship.
+frontend/logo-*.png
+graphify-out/
+
+# Machine-local Claude Code state. Claude Code writes live session permissions
+# into settings.local.json, so a future local entry can land a path or command
+# in the repo.
+.claude/settings.local.json
+
+# The SQLite store holds plaintext provider API keys. `.nanites/` covers the
+# real home, but a test writing to a temp cwd would otherwise be trackable.
+*.db
+*.sqlite
+*.db-wal
+*.db-shm
+
+# The plugin's compiled server is normally gitignored like any other dist/,
+# but it is what `${CLAUDE_PLUGIN_ROOT}/dist/index.js` launches. A consumer
+# who installs the plugin from a marketplace gets no build step, so the
+# published copy has to carry its own binary. Un-ignore it (and its
+# dependencies manifest) explicitly; the repo-root dist/ stays ignored.
+!plugin/nanites/dist/
+!plugin/nanites/package.json
+!plugin/nanites/package-lock.json
+
+# A generated copy of plugin/nanites/skills/nanites/SKILL.md, recreated by
+# scripts/copy-skill.mjs on every build. Tracking both invites drift.
+.claude/skills/
+
+# A generated dump of the registered tool schemas. Nothing reads it and it
+# goes stale whenever a tool signature changes.
+nanites_mcp_context.txt

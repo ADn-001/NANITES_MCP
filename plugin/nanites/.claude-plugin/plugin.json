@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "nanites",
+  "displayName": "Nanites",
+  "version": "1.0.0",
+  "description": "Slash commands + delegation skill for Nanites, the local-model MCP server that lets Claude offload grunt work to local LM Studio models. Register models, run test regimens, spin up sub-agents, and see cost saved — all via your local models instead of paid tokens.",
+  "author": {
+    "name": "Adnan Shelim",
+    "url": "https://github.com/ADn-001"
+  },
+  "homepage": "https://github.com/ADn-001/NANITES_MCP",
+  "license": "MIT",
+  "keywords": [
+    "nanites",
+    "lm-studio",
+    "local-models",
+    "sub-agents",
+    "mcp",
+    "delegation",
+    "cost-savings"
+  ],
+  "settings": {
+    "description": "Nanites — local model delegation"
+  }
+}

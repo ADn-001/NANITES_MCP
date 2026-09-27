@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "nanites": {
+      "command": "node",
+      "args": ["dist/index.js"]
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "version": "1.0",
+  "truncation": null,
+  "padding": null,
+  "added_tokens": [],
+  "normalizer": null,
+  "pre_tokenizer": { "type": "Whitespace" },
+  "post_processor": null,
+  "decoder": null,
+  "model": {
+    "type": "WordPiece",
+    "vocab": {
+      "[PAD]": 0,
+      "[UNK]": 1,
+      "[CLS]": 2,
+      "[SEP]": 3,
+      "hello": 4,
+      "world": 5,
+      "token": 6,
+      "##izer": 7,
+      "##ing": 8,
+      "probe": 9,
+      "sentence": 10,
+      "a": 11,
+      "count": 12,
+      "##s": 13
+    },
+    "unk_token": "[UNK]",
+    "continuing_subword_prefix": "##"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "nanites",
+  "owner": {
+    "name": "Adnan Shelim",
+    "url": "https://github.com/ADn-001"
+  },
+  "plugins": [
+    {
+      "name": "nanites",
+      "source": "./plugin/nanites",
+      "description": "Delegate bounded sub-agent work to local LM Studio models instead of paid frontier tokens.",
+      "version": "1.0.0",
+      "category": "productivity"
+    }
+  ]
+}

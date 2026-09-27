@@ -1,0 +1,4 @@
+# Markdown must stay LF on every platform. Several tests (phase33 skill-source
+# frontmatter, byte-identity, drift) assert exact LF strings; core.autocrlf on
+# Windows was turning them CRLF in fresh checkouts and breaking those suites.
+*.md text eol=lf
