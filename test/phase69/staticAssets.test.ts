@@ -54,7 +54,7 @@ async function setup(): Promise<Harness> {
 describe("dashboard static assets", () => {
   it("serves a logo the HTML references", async () => {
     const h = await setup();
-    const res = await fetch(`${h.base}/logo-retro.png`);
+    const res = await fetch(`${h.base}/logo-retro-day.png`);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("image/png");
     const body = await res.arrayBuffer();
@@ -100,7 +100,7 @@ describe("dashboard static assets", () => {
   it("does not serve non-image files even inside the asset directory", async () => {
     const h = await setup();
     // index.html is reachable by design; nothing else is.
-    for (const p of ["/index.html.bak", "/logo-retro.png.txt", "/.env"]) {
+    for (const p of ["/index.html.bak", "/logo-retro-day.png.txt", "/.env"]) {
       const res = await fetch(`${h.base}${p}`);
       expect(res.status, p).not.toBe(200);
     }

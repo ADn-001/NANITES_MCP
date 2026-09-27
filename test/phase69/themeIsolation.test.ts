@@ -92,11 +92,26 @@ describe("theme isolation", () => {
     }
   });
 
-  it("sizes the retro headline to the style guide and drops the glow", () => {
+  it("sizes the retro headline for legibility and drops the glow", () => {
     expect(style).toMatch(
-      /html\[data-theme="retro"\][^}]*h1\.title[^}]*font-size:20px/,
+      /html\[data-theme="retro"\][^}]*h1\.title[^}]*font-size:21px[^}]*font-weight:700/,
     );
     expect(style).toMatch(/html\[data-theme="retro"\][^}]*text-shadow:none/);
+  });
+
+  it("keeps retro body and muted text at a readable size and contrast", () => {
+    // The muted token was 1.88:1 on paper (day) and 1.71:1 on the night
+    // ground — both far under the 4.5:1 floor, which is what made the profile
+    // hard to read. Hierarchy now comes from size and weight, not opacity.
+    expect(style).toMatch(
+      /html\[data-theme="retro"\] body\{[^}]*font-size:16px[^}]*font-weight:500/,
+    );
+    expect(style).toMatch(
+      /html\[data-theme="retro"\][^}]*\.panel-tag,[^}]*font-size:11px; font-weight:600/,
+    );
+    // A muted ink that clears 4.5:1 against both of retro's grounds.
+    expect(style).not.toMatch(/--text-muted:#b7b09c/);
+    expect(style).not.toMatch(/--text-muted:#403e35/);
   });
 
   it("holds every profile's logo in one identically-sized holder", () => {
@@ -110,6 +125,39 @@ describe("theme isolation", () => {
     // One holder rule, no per-theme override, so the box cannot drift.
     expect(style).toMatch(/\.brand-mark\{[^}]*width:56px;[^}]*height:56px/);
     expect(style).not.toMatch(/html\[data-theme="[a-z]+"\] \.brand-mark\{[^}]*width/);
+  });
+
+  it("gives each profile its own logo file, with a day/night pair for retro", () => {
+    // All three profiles use the same mark in different inks, so the files
+    // must be distinct — one shared file is what made every profile show the
+    // retro mark. Retro needs two, because the day ink is a deep red chosen
+    // against paper and the night ink a lighter orange against black.
+    const files = [
+      "logo-phosphor.png",
+      "logo-claude.png",
+      "logo-retro-day.png",
+      "logo-retro-night.png",
+    ];
+    const bytes = files.map((f) => readFileSync(path.join(process.cwd(), "frontend", f)));
+    for (let i = 0; i < files.length; i++) {
+      for (let j = i + 1; j < files.length; j++) {
+        expect(
+          bytes[i].equals(bytes[j]),
+          `${files[i]} and ${files[j]} are byte-identical — one logo is being used for two profiles`,
+        ).toBe(false);
+      }
+    }
+    // The retro header swaps the file when the mode changes, rather than
+    // filtering one image, because one tint cannot serve both grounds.
+    expect(html).toMatch(/logo-retro-night\.png' : 'logo-retro-day\.png'/);
+    expect(html).not.toMatch(/logo-retro\.png/);
+  });
+
+  it("loads the animated skull frames, not a static logo, in the nav zone", () => {
+    // Unifying the brand mark repointed the hover skull at logo-phosphor.png,
+    // which left the cursor-phobia animation playing over a still image.
+    expect(html).toMatch(/id="hoverSkullImg" src="skull-idle\.png"/);
+    expect(html).toMatch(/<img class="card-skull" src="\$\{SKULL_IDLE_SRC\}"/);
   });
 
   it("keeps the legacy fixed-position mascot lockup out of the header", () => {

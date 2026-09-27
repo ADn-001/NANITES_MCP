@@ -25,15 +25,15 @@
     --panel-b:#eae6d7;
     --border:#23241f;
     --text:#23241f;
-    --text-muted:#b7b09c;
+    --text-muted:#67614f;
     --accent:#c1440e;
     --accent-contrast:#f2efe4;
     --success:#c1440e;
-    --warn:#b7b09c;
+    --warn:#67614f;
     --danger:#c1440e;
     --radius:0px;
     --signal:#c1440e;
-    --faint:#b7b09c;
+    --faint:#67614f;
     --surface:#f2efe4;
     --scrim:rgba(35,36,31,.06);
     --header-wash:linear-gradient(180deg, rgba(35,36,31,.04), transparent);
@@ -48,19 +48,19 @@
     --panel-b:#1c1c18;
     --border:#e4e0d1;
     --text:#e4e0d1;
-    --text-muted:#403e35;
+    --text-muted:#8f8a7e;
     --accent:#ff7a3d;
     --accent-contrast:#151512;
     --success:#ff7a3d;
-    --warn:#403e35;
+    --warn:#8f8a7e;
     --danger:#ff7a3d;
     --signal:#ff7a3d;
-    --faint:#403e35;
+    --faint:#8f8a7e;
     --surface:#151512;
     --scrim:rgba(0,0,0,.35);
     --header-wash:linear-gradient(180deg, rgba(255,255,255,.03), transparent);
   }
-  html[data-theme="retro"] body{ font-size:15px; line-height:1.55; letter-spacing:normal; }
+  html[data-theme="retro"] body{ font-size:16px; line-height:1.6; letter-spacing:normal; font-weight:500; }
   html[data-theme="retro"] ::selection{ background:var(--signal); color:var(--bg); }
 
   /* Structure speaks in the chrome register: uppercase, wide tracking, small.
@@ -70,20 +70,35 @@
   html[data-theme="retro"] .btn,
   html[data-theme="retro"] label.f-label,
   html[data-theme="retro"] .theme-option .opt-name{
-    text-transform:uppercase; letter-spacing:.16em; font-size:10px;
+    text-transform:uppercase; letter-spacing:.14em; font-size:11px; font-weight:600;
   }
   html[data-theme="retro"] h1.title,
   html[data-theme="retro"] .site-header h1{
-    text-transform:uppercase; letter-spacing:.18em; font-size:20px; font-weight:700;
+    text-transform:uppercase; letter-spacing:.18em; font-size:21px; font-weight:700;
     text-shadow:none;
   }
   html[data-theme="retro"] .title-block h1{ text-shadow:none; }
   html[data-theme="retro"] .sub,
-  html[data-theme="retro"] .title-sub{ opacity:.68; letter-spacing:normal; }
+  html[data-theme="retro"] .title-sub{ opacity:.9; letter-spacing:normal; font-size:13.5px; }
 
-  /* Hierarchy comes from opacity, never a second grey. */
-  html[data-theme="retro"] .panel-tag{ opacity:.72; }
-  html[data-theme="retro"] .helper{ font-size:11px; opacity:.6; }
+  /* Hierarchy comes from size and weight; opacity is only a light nudge, because
+     the muted token is already a real ink (5.4:1 on paper) and fading it further
+     is what made the profile hard to read. */
+  html[data-theme="retro"] .panel-tag{ opacity:.92; }
+
+  /* These carry labels and metadata in the shared rules at 10-11px, which is
+     legible on a black terminal and too small on paper. Retro only: the
+     terminal and the modern profile are unchanged. */
+  html[data-theme="retro"] .kv-row{ font-size:13.5px; }
+  html[data-theme="retro"] .kv-row span:first-child{ font-size:11.5px; }
+  html[data-theme="retro"] label{ font-size:11.5px; font-weight:600; }
+  html[data-theme="retro"] .profile-card .pc-name{ font-size:12.5px; font-weight:700; }
+  html[data-theme="retro"] .profile-card .pc-meta{ font-size:11.5px; }
+  html[data-theme="retro"] .profile-card .pc-active{ font-size:10.5px; font-weight:600; }
+  html[data-theme="retro"] input,
+  html[data-theme="retro"] select{ font-size:14px; }
+  html[data-theme="retro"] .panel-title{ font-size:15px; }
+  html[data-theme="retro"] .helper{ font-size:12px; opacity:.85; }
 
   /* Corner brackets: two opposing L-shapes in the signal colour, on the panel
      only. One device marks a container as a discrete unit. */
@@ -749,7 +764,7 @@
 
 <header class="site-header">
   <div class="brand-mark phos-only"><img src="logo-phosphor.png" alt="Nanites"></div>
-  <div class="brand-mark retro-only"><img src="logo-retro.png" alt="Nanites"></div>
+  <div class="brand-mark retro-only"><img id="retroMark" src="logo-retro-day.png" alt="Nanites"></div>
   <div class="brand-mark claude-only" id="mascotLockup" title="Click me">
     <img id="mascotGif" src="logo-claude.png" alt="Nanites">
   </div>
@@ -784,7 +799,7 @@
   </button>
   <div class="cog-hover-skull-zone phos-only" id="hoverSkullZone">
     <div class="cog-hover-skull" id="hoverSkull">
-      <img id="hoverSkullImg" src="logo-phosphor.png" alt="Nanites signal avatar">
+      <img id="hoverSkullImg" src="skull-idle.png" alt="Nanites signal avatar">
     </div>
   </div>
   <button data-tab="tab-live" class="active">
@@ -2466,6 +2481,10 @@ document.getElementById('saveProfileBtn').addEventListener('click', async ()=>{
 });
 
 /* ---------- Theme toggle (persisted to the active profile) ---------- */
+// Set once the user picks a theme in Settings; until then the active
+// profile decides it.
+let themeChosenByUser = false;
+
 const RETRO_MODES = ['day','night'];
 const RETRO_MODE_KEY = 'nanites.retroMode';
 function readRetroMode(){
@@ -2476,6 +2495,12 @@ function readRetroMode(){
 }
 function applyRetroMode(mode){
   document.documentElement.setAttribute('data-mode', mode);
+  // The retro mark is a separate file per mode: the day ink is a deep
+  // signal red on paper, the night ink a lighter orange on near-black. One
+  // file tinted by CSS cannot serve both, because the day tint is chosen for
+  // contrast against paper and the night tint against black.
+  const mark = document.getElementById('retroMark');
+  if(mark) mark.src = mode === 'night' ? 'logo-retro-night.png' : 'logo-retro-day.png';
   try{ localStorage.setItem(RETRO_MODE_KEY, mode); }catch{ /* private mode */ }
   updateRetroToggle(mode);
 }
@@ -2505,6 +2530,7 @@ document.querySelectorAll('[data-theme-choice]').forEach(b=>{
     const choice = b.dataset.themeChoice;
     if(choice === document.documentElement.getAttribute('data-theme')) return;
     applyTheme(choice);
+    themeChosenByUser = true;
     // Persist to the active profile so the choice survives a restart, the
     // same way the MCP reports it back on /api/profiles.
     fetch('/api/settings/profile', {
@@ -2522,7 +2548,6 @@ document.querySelectorAll('[data-retro-mode]').forEach(b=>{
 applyTheme(document.documentElement.getAttribute('data-theme'));
 
 /* ---------- Profile selector + editor load (from /api/profiles + /api/profile) ---------- */
-let themeLoaded = false;
 function titleCase(s){ return (s||'—').replace(/\b\w/g, c=>c.toUpperCase()); }
 function setActiveProfileLabel(name){
   const label = name || '—';
@@ -2595,7 +2620,12 @@ async function loadEditorProfile(name){
     if(!res.ok) return;
     const data = await res.json();
     fillEditorFields(data.profile);
-    if(data.profile?.theme && !themeLoaded){ applyTheme(data.profile.theme); themeLoaded = true; }
+    // Follow the profile's theme until the user picks one. The old latch
+    // latched on the first load, so switching to another profile left the UI
+    // on the previous profile's theme while the server reported the new one.
+    if(data.profile?.theme && !themeChosenByUser){
+      applyTheme(data.profile.theme);
+    }
   } catch {}
 }
 async function loadProfileSelector(preferName){
