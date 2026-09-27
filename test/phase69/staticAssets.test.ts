@@ -9,11 +9,22 @@
  * are served, and the route cannot be walked out of its directory.
  */
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import path from "node:path";
 import { buildDeps, type ToolDeps } from "../../src/tools/deps.js";
 import { startUiServer } from "../../src/ui/server.js";
 import { scratchHome, cleanup } from "../phase3/helpers.js";
 import { startMockLmStudio } from "../phase1/mockServer.js";
 import { liveHandler } from "../phase11/helpers.js";
+
+/** Files git actually tracks, so "committed" is checked against the index. */
+const tracked = new Set(
+  execFileSync("git", ["ls-files", "frontend"], { encoding: "utf8" })
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean),
+);
 
 interface Harness {
   deps: ToolDeps;
@@ -94,5 +105,37 @@ describe("dashboard static assets", () => {
       expect(res.status, p).not.toBe(200);
     }
     await h.close();
+  });
+});
+
+/**
+ * The first public release shipped a dashboard whose three logos 404'd: the
+ * images were on disk, but a `.gitignore` line matched them, so they never
+ * reached the repository. A passing HTTP test did not catch it either — the
+ * suite runs against the working tree, where the files exist. Only a fresh
+ * clone was wrong.
+ *
+ * So the check that matters is about version control, not the filesystem: every
+ * asset the HTML names must be a tracked file, or the published package is
+ * broken.
+ */
+describe("assets referenced by the dashboard are tracked", () => {
+  const html = readFileSync(path.resolve(import.meta.dirname, "..", "..", "frontend", "nanites-dashboard.html"), "utf8");
+  const referenced = new Set(
+    [...html.matchAll(/src="([^"]+\.(?:png|gif|jpg|jpeg|svg|webp|ico))"/g)].map((m) => m[1]!),
+  );
+  // The three script-sourced frames are referenced from JS, not markup.
+  referenced.add("skull-idle.png");
+  referenced.add("skull-spin.png");
+
+  it("found the dashboard's assets to check", () => {
+    // If this drops to zero the regex stopped matching and this file is
+    // vacuously passing — which is worse than no test.
+    expect(referenced.size).toBeGreaterThanOrEqual(5);
+  });
+
+  it.each([...referenced])("%s is tracked by git", (name) => {
+    const rel = `frontend/${name}`;
+    expect(tracked.has(rel), `${rel} is referenced by the dashboard but is not committed`).toBe(true);
   });
 });
