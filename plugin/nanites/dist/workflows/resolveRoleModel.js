@@ -10,6 +10,7 @@
  * anywhere is a structured error. A resolution `note` explains every pivot.
  */
 import { NanitesError } from "../helpers/errors.js";
+import { PROVIDER_KINDS } from "../storage/profileDefaults.js";
 import { RolePinStore } from "../storage/rolePinStore.js";
 import { ProviderKeyStore } from "../storage/providerKeyStore.js";
 import { ProviderModelStore } from "../storage/providerModelStore.js";
@@ -28,6 +29,13 @@ function cloudModelUsable(deps, profile, provider, modelId) {
         return false;
     const models = new ProviderModelStore(deps.db).listModels(profile.name, provider, true);
     return models.some((m) => m.model_id === modelId);
+}
+/** Every cloud provider that has this model id registered, in catalog order.
+ *  More than one means the id is genuinely ambiguous across providers, which
+ *  is exactly why the caller has to name the provider rather than guess. */
+function providersWithModel(deps, profileName, modelId) {
+    const store = new ProviderModelStore(deps.db);
+    return PROVIDER_KINDS.filter((p) => p !== "local" && store.listModels(profileName, p, true).some((m) => m.model_id === modelId));
 }
 /** The run shape that makes a non-tool-capable cloud pin a liability: this
  * profile can run the cloud fs tool loop, which `runSubAgent` turns into
@@ -261,6 +269,30 @@ export function resolveRoleModel(deps, profile, input) {
                 source: "explicit",
                 note: `explicit model ${input.explicitModel} on ${explicitProvider}.`,
             };
+        }
+        // No provider with a model id: a registered cloud model would be sent to
+        // LM Studio, which 404s with "not found in downloaded models" — an error
+        // indistinguishable from a typo. Name the provider instead.
+        if (!explicitProvider) {
+            const cloud = providersWithModel(deps, profile.name, input.explicitModel);
+            if (cloud.length === 1) {
+                throw new NanitesError({
+                    code: "cloud_provider_required",
+                    message: `"${input.explicitModel}" is a ${cloud[0]} model, not a local one. ` +
+                        `Pass provider: "${cloud[0]}" to route it to the cloud.`,
+                    retryable: false,
+                    details: { model_id: input.explicitModel, providers: cloud },
+                });
+            }
+            if (cloud.length > 1) {
+                throw new NanitesError({
+                    code: "cloud_provider_required",
+                    message: `"${input.explicitModel}" is registered on ${cloud.length} providers ` +
+                        `(${cloud.join(", ")}). Pass provider: "<one of them>" to choose.`,
+                    retryable: false,
+                    details: { model_id: input.explicitModel, providers: cloud },
+                });
+            }
         }
         return {
             provider: "local",

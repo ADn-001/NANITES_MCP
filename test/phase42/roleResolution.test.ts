@@ -236,3 +236,59 @@ describe("provider kinds", () => {
     });
   });
 });
+
+/**
+ * Found in a live run: run_sub_agent with a cloud model_id and no `provider`
+ * sent the call to LM Studio, which 404'd with "not found in downloaded
+ * models" — indistinguishable from a typo'd local model, even though the model
+ * was registered and sitting in the profile. Resolution now names the provider.
+ */
+describe("an explicit cloud model id with no provider is refused clearly", () => {
+  it("names the single provider that has the model", () => {
+    const { d, profile } = harness("p-cloud-noprov");
+    addKey(d, "p-cloud-noprov", "cloudflare");
+    addModel(d, "p-cloud-noprov", "cloudflare", "@cf/meta/llama-3.2-3b-instruct");
+
+    let err: unknown;
+    try {
+      resolveRoleModel(d, profile, { roles: [], brief: "hi", explicitModel: "@cf/meta/llama-3.2-3b-instruct" });
+    } catch (e) { err = e; }
+    expect(err, "expected a structured refusal, not a local dispatch").toBeDefined();
+    const e = err as { code: string; message: string; details?: { providers?: string[] } };
+    expect(e.code).toBe("cloud_provider_required");
+    expect(e.message).toContain("cloudflare");
+    expect(e.details?.providers).toEqual(["cloudflare"]);
+  });
+
+  it("lists every provider when the id is ambiguous across two", () => {
+    const { d, profile } = harness("p-cloud-ambig");
+    addKey(d, "p-cloud-ambig", "cloudflare");
+    addKey(d, "p-cloud-ambig", "openrouter");
+    addModel(d, "p-cloud-ambig", "cloudflare", "shared-id");
+    addModel(d, "p-cloud-ambig", "openrouter", "shared-id");
+
+    let err: unknown;
+    try {
+      resolveRoleModel(d, profile, { roles: [], brief: "hi", explicitModel: "shared-id" });
+    } catch (e) { err = e; }
+    const e = err as { code: string; details?: { providers?: string[] } };
+    expect(e.code).toBe("cloud_provider_required");
+    expect(e.details?.providers).toEqual(["cloudflare", "openrouter"]);
+  });
+
+  it("still routes when the provider IS given", () => {
+    const { d, profile } = harness("p-cloud-given");
+    addKey(d, "p-cloud-given", "cloudflare");
+    addModel(d, "p-cloud-given", "cloudflare", "@cf/x/y");
+    expect(resolveRoleModel(d, profile, {
+      roles: [], brief: "hi", explicitModel: "@cf/x/y", explicitProvider: "cloudflare",
+    })).toMatchObject({ provider: "cloudflare", model_id: "@cf/x/y", source: "explicit" });
+  });
+
+  it("still treats an unregistered id as local", () => {
+    const { d, profile } = harness("p-local-unreg");
+    // No keys, no registered cloud models: a genuinely local name must pass.
+    expect(resolveRoleModel(d, profile, { roles: [], brief: "hi", explicitModel: "qwen3.5-0.8b" }))
+      .toMatchObject({ provider: "local", model_id: "qwen3.5-0.8b", source: "explicit" });
+  });
+});
