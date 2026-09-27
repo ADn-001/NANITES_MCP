@@ -90,3 +90,62 @@ describe("Phase 10 gate — cost saved report", () => {
     expect(() => getCostSavedReport(deps, "nope", { now: NOW })).toThrow(/no profile named/i);
   });
 });
+
+/**
+ * The breakdown was keyed on model_id alone, so a cloud model id that also
+ * appeared in the local call log collapsed into one row — and because locals
+ * are added first, every cloud model was reported as provider "local" while
+ * cloud_calls counted it correctly. Found in a live run: four real providers
+ * all showed provider "local".
+ */
+describe("cost report breakdown keeps local and cloud rows apart", () => {
+  let deps: ToolDeps;
+  let home: string;
+
+  beforeEach(() => {
+    home = scratchHome();
+    deps = buildDeps(home);
+    deps.profiles.createProfile({ name: "t", pricing: { input_per_million_usd: INPUT, output_per_million_usd: OUTPUT } });
+  });
+  afterEach(() => {
+    deps.close();
+    cleanup(home);
+  });
+
+  it("tags a cloud model as its provider, not local", () => {
+    const modelId = "shared-model-id";
+    deps.callLogs.insert({ profile_name: "t", model_id: modelId, tokens_in: 100, tokens_out: 50, duration_ms: 10, created_at: isoAgo(1000) });
+    deps.providerCallLogs.logCall({
+      profile_name: "t", call_uid: "c1", provider: "cloudflare", model_id: modelId,
+      task: null, role: null, tokens_in: 200, tokens_out: 100, duration_ms: 20,
+      finish_reason: "stop", cost_usd: 0.25, status: "success", created_at: isoAgo(1000),
+    });
+
+    const r = getCostSavedReport(deps, "t", "all");
+    const cloud = r.breakdown.find((b) => b.provider === "cloudflare");
+    expect(cloud, "no cloudflare row in the breakdown").toBeDefined();
+    expect(cloud!.model_id).toBe(modelId);
+    expect(cloud!.actual_cost_usd).toBeCloseTo(0.25, 6);
+
+    // The local run of the same id must stay a separate, untagged-cost row.
+    const local = r.breakdown.find((b) => b.provider === "local");
+    expect(local, "no local row in the breakdown").toBeDefined();
+    expect(local!.actual_cost_usd).toBe(0);
+    expect(r.cloud_calls).toBe(1);
+  });
+
+  it("never reports a provider model as local", () => {
+    for (const provider of ["cloudflare", "openrouter", "omniroute", "generic"] as const) {
+      deps.providerCallLogs.logCall({
+        profile_name: "t", call_uid: "c-" + provider, provider, model_id: "only-cloud",
+        task: null, role: null, tokens_in: 10, tokens_out: 5, duration_ms: 5,
+        finish_reason: "stop", cost_usd: 0.01, status: "success", created_at: isoAgo(1000),
+      });
+    }
+    const r = getCostSavedReport(deps, "t", "all");
+    for (const b of r.breakdown) {
+      expect(b.provider, `${b.model_id} was reported as local`).not.toBe("local");
+    }
+    expect(r.breakdown).toHaveLength(4);
+  });
+});

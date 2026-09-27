@@ -110,7 +110,14 @@ export function getCostSavedReport(deps: ToolDeps, profileName: string, opts: Co
     const equiv = equivOf(ti, to);
     totalEquiv += equiv;
     totalSpend += spend;
-    const row = byModel.get(modelId) ?? {
+    // Keyed by provider as well as model id. A cloud model id can also appear
+    // in the local call log, and keying on the id alone merged the two: the
+    // first row created won the `provider` field, and locals are added first,
+    // so every cloud model was reported as provider "local" while cloud_calls
+    // counted it correctly. Provider is part of a model's identity here, the
+    // same way the registry namespaces local and cloud entries.
+    const key = provider + "|" + modelId;
+    const row = byModel.get(key) ?? {
       model_id: modelId, provider, calls: 0, tokens_in: 0, tokens_out: 0,
       orchestrator_equivalent_usd: 0, actual_cost_usd: 0,
     };
@@ -119,7 +126,7 @@ export function getCostSavedReport(deps: ToolDeps, profileName: string, opts: Co
     row.tokens_out += to;
     row.orchestrator_equivalent_usd += equiv;
     row.actual_cost_usd += spend;
-    byModel.set(modelId, row);
+    byModel.set(key, row);
   };
 
   for (const call of calls) add(call.model_id, "local", call.tokens_in, call.tokens_out, 0);
