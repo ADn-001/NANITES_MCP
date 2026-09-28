@@ -48,6 +48,47 @@ describe("GET /", () => {
   });
 });
 
+describe("GET /api/leaderboard — provider filter", () => {
+  /**
+   * The board had no way to ask for one provider: view only ever said
+   * all/local/cloud, so the Providers tab and the board could never be
+   * compared per provider. The filter is that missing control.
+   *
+   * The same-id collision it would otherwise hide is NOT fixed here and is
+   * pinned as the known gap: model_registry is keyed (profile_name, model_id)
+   * with no provider column in the key, so two providers serving one id
+   * cannot both be stored. That needs the namespacing migration. Whichever
+   * provider was written last is the row that survives, and the filter must
+   * never leak it to the other provider.
+   */
+  it("returns only the requested provider and never leaks another provider row", async () => {
+    const h = await setup((deps) => {
+      deps.registry.upsert("t", { model_id: "shared", provider: "cloudflare", roles: ["coder"], scores: {}, best_params: {}, last_tested: null, performance_score: 90 });
+      deps.registry.upsert("t", { model_id: "shared", provider: "openrouter", roles: ["coder"], scores: {}, best_params: {}, last_tested: null, performance_score: 40 });
+      deps.registry.upsert("t", { model_id: "only-cf", provider: "cloudflare", roles: ["coder"], scores: {}, best_params: {}, last_tested: null, performance_score: 70 });
+    });
+
+    type Row = { model_id: string; provider: string | null };
+    const cf = (await (await fetch(`${h.base}/api/leaderboard?role=all&provider=cloudflare`)).json()) as { rows: Row[] };
+    // Every returned row really is cloudflare.
+    expect(cf.rows.every((r) => r.provider === "cloudflare")).toBe(true);
+    expect(cf.rows.map((r) => r.model_id)).toContain("only-cf");
+
+    const or = (await (await fetch(`${h.base}/api/leaderboard?role=all&provider=openrouter`)).json()) as { rows: Row[] };
+    expect(or.rows.every((r) => r.provider === "openrouter")).toBe(true);
+    // The row the filter must never hand to openrouter: it belongs to cloudflare.
+    expect(or.rows.map((r) => r.model_id)).not.toContain("only-cf");
+
+    const all = (await (await fetch(`${h.base}/api/leaderboard?role=all`)).json()) as { rows: Row[] };
+    expect(all.rows.length).toBeGreaterThan(cf.rows.length);
+
+    await h.ui.close();
+    h.deps.close();
+    await h.mock.close();
+    cleanup(h.deps.home);
+  });
+});
+
 describe("GET /api/leaderboard", () => {
   it("sorts by performance_score desc and filters by role", async () => {
     const h = await setup((deps) => {

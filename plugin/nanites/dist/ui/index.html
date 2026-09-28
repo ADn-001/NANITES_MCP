@@ -760,6 +760,9 @@
   }
   .discover-name{ font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
   .discover-meta{ font-size:10px; color:var(--text-muted); white-space:nowrap; text-align:right; }
+  .discover-row--head{ background:transparent; border-color:var(--text-muted); }
+  .discover-row--head .discover-name{ white-space:normal; }
+  .discover-head{ margin-bottom:10px; }
   .profile-card.switching{ opacity:.45; pointer-events:none; }
   .profile-card.switching .pc-name{ opacity:.5; }
   .profile-card.switching::after{
@@ -920,6 +923,14 @@
       <p class="panel-title"><span class="phos-only">Model Registry</span><span class="retro-only">Model Registry</span><span class="claude-only">Model Registry</span> <span class="panel-tag phos-only">RANKED</span><span class="panel-tag retro-only">Ranked</span><span class="panel-tag claude-only">Ranked</span></p>
       <div class="subtab-row" id="roleTabs"><!-- built dynamically from /api/roles -->
         <button class="subtab active" data-role="all">All-Time</button>
+      </div>
+      <div class="subtab-row" id="leaderboardProviderRow">
+        <button class="subtab active" data-provider="">All Sources</button>
+        <button class="subtab" data-provider="local">LM Studio</button>
+        <button class="subtab" data-provider="cloudflare">Cloudflare</button>
+        <button class="subtab" data-provider="openrouter">OpenRouter</button>
+        <button class="subtab" data-provider="omniroute">OmniRoute</button>
+        <button class="subtab" data-provider="generic">Generic</button>
       </div>
       <p style="font-size:11px; color:var(--text-muted); margin:0 0 10px;">Pin a role to its best model by clicking the row's pin control — auto-routed on later sub-agent runs (falls back to dynamic when unavailable).</p>
       <table>
@@ -1145,6 +1156,7 @@
           <option value="omniroute">OmniRoute</option>
           <option value="generic">Generic</option>
         </select>
+        <button class="btn" id="deregisterSelectedBtn" disabled onclick="deregisterSelectedProviderModels()">Remove selected</button>
         <button class="btn" id="discoverModelsBtn">Discover Models</button>
       </div>
       <div style="margin-bottom:12px;padding:10px;background:var(--panel-bg);border:1px solid var(--border);border-radius:6px;">
@@ -1852,12 +1864,35 @@ window.toggleKey = async function(provider, keyId, enabled){
   } catch {}
 };
 
+/* Select-all over the registered-models table, scoped to whatever the
+   provider filter currently shows. The header checkbox goes indeterminate
+   when a partial selection is made, so it never claims a state that is wrong. */
+window.selectAllProviderModels = function(checked){
+  document.querySelectorAll(".provider-model-check").forEach(cb => { cb.checked = checked; });
+  updateProviderModelCount();
+};
+window.updateProviderModelCount = function(){
+  const items = [...document.querySelectorAll(".provider-model-check")];
+  const n = items.filter(cb => cb.checked).length;
+  const head = document.getElementById("providerSelectAll");
+  if(head){
+    head.checked = n > 0 && n === items.length;
+    head.indeterminate = n > 0 && n < items.length;
+  }
+  const btn = document.getElementById("deregisterSelectedBtn");
+  if(btn){
+    btn.disabled = n === 0;
+    btn.textContent = n ? "Remove " + n + " selected" : "Remove selected";
+  }
+};
+
 function renderProviderModels(){
   const el = document.getElementById('providerModelsContainer');
   if(!el) return;
   const filter = document.getElementById('providerModelFilter')?.value || '';
   const models = (providerState.models || []).filter(m => !filter || m.provider === filter);
   const thead = `<thead><tr style="border-bottom:1px solid var(--border);">
+    <th style="text-align:center;padding:4px 6px;color:var(--text-muted);"><input type="checkbox" id="providerSelectAll" title="Select all" onchange="selectAllProviderModels(this.checked)"></th>
     <th style="text-align:left;padding:4px 6px;color:var(--text-muted);">Provider</th>
     <th style="text-align:left;padding:4px 6px;color:var(--text-muted);">Model</th>
     <th style="text-align:left;padding:4px 6px;color:var(--text-muted);">Context</th>
@@ -1867,7 +1902,7 @@ function renderProviderModels(){
     <th style="text-align:right;padding:4px 6px;"></th>
   </tr></thead>`;
   if(!models.length){
-    el.innerHTML = `<table style="width:100%;font-size:11px;border-collapse:collapse;">${thead}<tbody><tr><td colspan="7" style="padding:16px 0;text-align:center;color:var(--text-muted);">No registered models. Use "Discover Models" or add one manually above.</td></tr></tbody></table>`;
+    el.innerHTML = `<table style="width:100%;font-size:11px;border-collapse:collapse;">${thead}<tbody><tr><td colspan="8" style="padding:16px 0;text-align:center;color:var(--text-muted);">No registered models. Use "Discover Models" or add one manually above.</td></tr></tbody></table>`;
     return;
   }
   el.innerHTML = `<table style="width:100%;font-size:11px;border-collapse:collapse;">${thead}<tbody>${models.map(m => {
@@ -1882,6 +1917,7 @@ function renderProviderModels(){
       : '';
     const rolesCell = (roleChips + visionChip) || '<span style="color:var(--text-muted);">—</span>';
     return `<tr style="border-bottom:1px solid var(--border-dark);">
+      <td style="padding:4px 6px;text-align:center;"><input type="checkbox" class="provider-model-check" data-provider="${m.provider}" data-model-id="${m.model_id}" onchange="updateProviderModelCount()"></td>
       <td style="padding:4px 6px;">${PROVIDER_NAMES[m.provider] || m.provider}</td>
       <td style="padding:4px 6px;font-weight:500;">${displayName}</td>
       <td style="padding:4px 6px;color:var(--text-muted);">${m.context_window ? m.context_window.toLocaleString() : '—'}</td>
@@ -1906,6 +1942,24 @@ window.setStickyModel = async function(provider, modelId){
   } catch {}
 };
 
+/* Bulk remove for the registered list. Each call reports its own result,
+   and the list is redrawn once at the end rather than per row. */
+window.deregisterSelectedProviderModels = async function(){
+  const picked = [...document.querySelectorAll(".provider-model-check")]
+    .filter(cb => cb.checked)
+    .map(cb => ({ provider: cb.dataset.provider, model_id: cb.dataset.modelId }));
+  if(!picked.length) return;
+  if(!confirm("Remove " + picked.length + " model(s) from the registry? This does not delete them from the provider.")) return;
+  let failed = 0;
+  for(const m of picked){
+    try {
+      const res = await fetch("/api/providers/models?provider=" + encodeURIComponent(m.provider) + "&model_id=" + encodeURIComponent(m.model_id), { method: "DELETE" });
+      if(!res.ok) failed++;
+    } catch { failed++; }
+  }
+  await refreshProviders();
+  if(failed) console.warn(failed + " model(s) failed to deregister");
+};
 window.deregisterModel = async function(provider, modelId){
   try {
     await fetch(`/api/providers/models?provider=${encodeURIComponent(provider)}&model_id=${encodeURIComponent(modelId)}`, {
@@ -1951,23 +2005,35 @@ window.discoverModels = async function(){
   if(!panel || !content) return;
   panel.style.display = 'block';
   content.innerHTML = '<p style="font-size:12px;color:var(--text-muted);">Scrying…</p>';
+  // Honour the provider filter: the toolbar dropdown scopes the registered
+  // list, and discovery followed it. It sent no provider at all, so clicking
+  // Discover under "Cloudflare" still listed every provider's models.
+  const only = document.getElementById('providerModelFilter')?.value || null;
   try {
-    const res = await fetch('/api/providers/discover', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+    const res = await fetch('/api/providers/discover', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(only ? { provider: only } : {}) });
     const data = await res.json();
+    const scope = only ? ` for ${only}` : '';
     if(data.code === 'no_keys_configured'){
-      content.innerHTML = '<p style="font-size:12px;color:var(--text-muted);">No API keys configured for any provider. Add one in the API Keys panel above.</p><button class="btn" style="margin-top:8px;" onclick="closeDiscoverPanel()">Close</button>';
+      content.innerHTML = `<p style="font-size:12px;color:var(--text-muted);">No API keys configured${scope ? ` for ${only}` : ' for any provider'}. Add one in the API Keys panel above.</p><button class="btn" style="margin-top:8px;" onclick="closeDiscoverPanel()">Close</button>`;
       return;
     }
     if(!res.ok) throw new Error(data.message || data.code || 'Discovery failed');
     if(!data.models || !data.models.length){
-      content.innerHTML = '<p style="font-size:12px;color:var(--text-muted);">No models found for the configured providers.</p><button class="btn" style="margin-top:8px;" onclick="closeDiscoverPanel()">Close</button>';
+      content.innerHTML = `<p style="font-size:12px;color:var(--text-muted);">No models found${scope ? ` for ${only}` : ' for the configured providers'}.</p><button class="btn" style="margin-top:8px;" onclick="closeDiscoverPanel()">Close</button>`;
       return;
     }
     providerState.discovery = data.models;
-    content.innerHTML = `<p style="font-size:11px;color:var(--text-muted);margin:0 0 10px;">Select models to register (${data.models.length} found):</p>
-      <div style="display:flex;flex-direction:column;gap:6px;max-height:300px;overflow-y:auto;">
+    const providersShown = [...new Set(data.models.map(m => m.provider))];
+    content.innerHTML = `<div class="discover-head">
+        <label class="discover-row discover-row--head">
+          <input type="checkbox" id="discoverSelectAll" onchange="toggleAllDiscovered(this.checked)" ${data.models.length ? 'checked' : ''}>
+          <span class="discover-name"><strong>Select all</strong> <span class="discover-meta" id="discoverCount">(${data.models.length} of ${data.models.length} selected)</span></span>
+        </label>
+      </div>
+      <p style="font-size:11px;color:var(--text-muted);margin:0 0 10px;">Select models to register (${data.models.length} found${providersShown.length > 1 ? ' across ' + providersShown.join(', ') : ''}):</p>
+      <div style="display:flex;flex-direction:column;gap:6px;max-height:300px;overflow-y:auto;" id="discoverList">
         ${data.models.map(m => `<label class="discover-row">
-          <input type="checkbox" data-model-id="${m.id}" data-provider="${m.provider}" checked>
+          <input type="checkbox" class="discover-item" data-model-id="${m.id}" data-provider="${m.provider}" checked onchange="updateDiscoverCount()">
           <span class="discover-name" title="${m.name}">${m.name}</span>
           <span class="discover-meta">${m.provider} · ctx ${m.context_length ? m.context_length.toLocaleString() : '?'}</span>
         </label>`).join('')}
@@ -1978,6 +2044,25 @@ window.discoverModels = async function(){
       </div>`;
   } catch(err) {
     content.innerHTML = `<p style="font-size:12px;color:var(--danger);">Discovery failed: ${err && err.message ? err.message : err}</p><button class="btn" style="margin-top:8px;" onclick="closeDiscoverPanel()">Close</button>`;
+  }
+};
+
+/* Select-all for the discovery list. The head checkbox drives every row,
+   and the counter follows a manual tick either way, so the two never
+   disagree about how many are selected. */
+window.toggleAllDiscovered = function(checked){
+  document.querySelectorAll("#discoverList .discover-item").forEach(cb => { cb.checked = checked; });
+  updateDiscoverCount();
+};
+window.updateDiscoverCount = function(){
+  const items = [...document.querySelectorAll("#discoverList .discover-item")];
+  const n = items.filter(cb => cb.checked).length;
+  const el = document.getElementById("discoverCount");
+  if(el) el.textContent = "(" + n + " of " + items.length + " selected)";
+  const head = document.getElementById("discoverSelectAll");
+  if(head){
+    head.checked = n > 0 && n === items.length;
+    head.indeterminate = n > 0 && n < items.length;
   }
 };
 
@@ -2111,6 +2196,7 @@ function renderProviderErrors(){
   const errors = providerState.errors || [];
   const thead = `<thead><tr style="border-bottom:1px solid var(--border);">
     <th style="text-align:left;padding:4px 6px;color:var(--text-muted);">Time</th>
+    <th style="text-align:center;padding:4px 6px;color:var(--text-muted);"><input type="checkbox" id="providerSelectAll" title="Select all" onchange="selectAllProviderModels(this.checked)"></th>
     <th style="text-align:left;padding:4px 6px;color:var(--text-muted);">Provider</th>
     <th style="text-align:left;padding:4px 6px;color:var(--text-muted);">Model</th>
     <th style="text-align:left;padding:4px 6px;color:var(--text-muted);">Error</th>
@@ -2184,7 +2270,8 @@ async function refreshPins(){
 }
 function providerLabel(provider){ return provider ? (PROVIDER_NAMES[provider] || provider) : 'LM Studio'; }
 function renderLeaderboard(role){
-  fetch('/api/leaderboard?role=' + encodeURIComponent(role))
+  const prov = document.querySelector('#leaderboardProviderRow .subtab.active')?.dataset.provider ?? '';
+  fetch('/api/leaderboard?role=' + encodeURIComponent(role) + '&provider=' + encodeURIComponent(prov))
     .then(res => res.ok ? res.json() : { rows: [] })
     .then(data => {
       const rows = data.rows || [];
@@ -2260,6 +2347,13 @@ document.getElementById('roleTabs').addEventListener('click', e=>{
     e.target.classList.add('active');
     renderLeaderboard(activeRole);
   }
+});
+document.getElementById('leaderboardProviderRow').addEventListener('click', e=>{
+  const btn = e.target.closest('.subtab');
+  if(!btn) return;
+  document.querySelectorAll('#leaderboardProviderRow .subtab').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  renderLeaderboard(activeRole);
 });
 (async function bootLeaderboard(){
   await refreshPins();

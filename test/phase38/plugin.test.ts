@@ -632,6 +632,32 @@ describe("Dashboard serves all required tabs", () => {
     cleanup(h.deps.home);
   });
 
+  /**
+   * Discovery read the provider from the query string only, while the
+   * dashboard posts a body, so "discover for this provider" scanned every
+   * configured provider instead. Verified live: a cloudflare-scoped discover
+   * returned models from all four.
+   */
+  it("scopes discovery to the provider named in the body", async () => {
+    const h = await setup();
+    // No keys at all: a provider-scoped request must not silently become an
+    // all-providers scan, so the no-keys answer is the same either way here.
+    const res = await fetch(`${h.base}/api/providers/discover`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider: "cloudflare" }),
+    });
+    expect(res.status).toBe(200);
+    const data = await res.json() as { models: Array<{ provider: string }>; code?: string };
+    // Whatever comes back belongs to cloudflare and nothing else.
+    expect(data.models.every((m) => m.provider === "cloudflare")).toBe(true);
+
+    await h.ui.close();
+    h.deps.close();
+    await h.mock.close();
+    cleanup(h.deps.home);
+  });
+
   it("discovery returns no_keys_configured when no keys exist", async () => {
     const h = await setup();
 

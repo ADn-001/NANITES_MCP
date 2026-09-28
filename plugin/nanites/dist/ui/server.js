@@ -260,11 +260,16 @@ function handleLeaderboard(deps, url, res) {
     const view = url.searchParams.get("view") ?? "all";
     const isCloud = view === "cloud" || view === "all";
     const isLocal = view === "local" || view === "all";
+    // Narrow to one provider. `view` only ever said all/local/cloud, so there
+    // was no way to ask the leaderboard for a single provider's models.
+    const provFilter = (url.searchParams.get("provider") ?? "").trim() || null;
     const rows = [];
     if (isLocal || isCloud) {
         const all = deps.registry.list(profileName);
         const entries = view === "all" ? all : isLocal ? all.filter((e) => e.provider === null) : all.filter((e) => e.provider !== null);
         for (const e of entries) {
+            if (provFilter && (e.provider ?? null) !== provFilter)
+                continue;
             if (role !== "all" && !e.roles.includes(role))
                 continue;
             const roleScore = role !== "all" ? (e.scores?.[role] ?? null) : null;
@@ -281,12 +286,19 @@ function handleLeaderboard(deps, url, res) {
     }
     if (isCloud) {
         const modelStore = new ProviderModelStore(deps.db);
-        const registeredIds = new Set(deps.registry.list(profileName).map((e) => e.model_id));
-        for (const m of modelStore.listModels(profileName, undefined, true)) {
+        // Keyed by provider AND id. Keying on the id alone meant a model another
+        // provider had already tested suppressed this provider's copy of it, so a
+        // registered model silently vanished from the board — the count in the
+        // Providers tab and the rows on the board stopped agreeing.
+        const registeredIds = new Set(deps.registry.list(profileName).map((e) => (e.provider ?? "local") + " " + e.model_id));
+        const catalog = modelStore
+            .listModels(profileName, undefined, true)
+            .filter((m) => !provFilter || m.provider === provFilter);
+        for (const m of catalog) {
             // Registered catalog row with no registry entry yet = registered, untested.
             // Only inferable role for an untested catalog row is `vision` (from its
             // capabilities) — other role membership lives on the registry entry.
-            if (registeredIds.has(m.model_id))
+            if (registeredIds.has(m.provider + " " + m.model_id))
                 continue;
             if (role !== "all" && !(role === "vision" && m.capabilities.vision === true))
                 continue;
@@ -1030,7 +1042,11 @@ async function handleProviderConfig(deps, req, res) {
 async function handleProviderDiscover(deps, req, res) {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const provParam = url.searchParams.get('provider') ?? '';
-    const prov = provParam ? validateProvider(provParam) : null;
+    // The provider may arrive in the body (how the dashboard calls it) or the
+    // query string. It used to read the query string only, so a per-provider
+    // discover silently scanned every configured provider instead.
+    const body = (await readJsonBody(req));
+    const prov = (body?.provider ?? provParam) ? validateProvider(body?.provider ?? provParam) : null;
     const { profileName, keyStore, modelStore } = providerDeps(deps);
     const { createProviderClient, GenericClient } = await import('../providers/client.js');
     const providers = prov ? [prov] : VALID_PROVIDERS;
