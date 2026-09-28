@@ -28,16 +28,26 @@ import {
 const PROFILE_NAME_RE = /^[\w.-]+$/;
 
 /**
+ * Names the router reserves for its own rows. The router reuses this repo's
+ * profile-scoped stores rather than forking them, so its state lives under a
+ * reserved profile name; a user profile with the same name would collide with
+ * router state and produce genuinely confusing symptoms much later. Rejecting
+ * it at create time is the only place that can be enforced cheaply.
+ */
+const RESERVED_PROFILE_NAMES: ReadonlySet<string> = new Set(["__router__"]);
+
+/**
  * True when `name` is safe to resolve to a file under the profiles dir.
  *
  * The regex alone is not sufficient: it accepts "." and "..", and
  * `path.join` normalizes those away, so `deleteProfile("../active_profile")`
  * would unlink `<home>/active_profile.json` — the real active-profile pointer,
  * which lives one level above the profiles dir. Reject both spellings
- * explicitly.
+ * explicitly. The router's reserved name is rejected for a different reason —
+ * a name collision rather than a path escape.
  */
 function isSafeProfileName(name: string): boolean {
-  return PROFILE_NAME_RE.test(name) && name !== "." && name !== "..";
+  return PROFILE_NAME_RE.test(name) && name !== "." && name !== ".." && !RESERVED_PROFILE_NAMES.has(name);
 }
 
 export class ProfileManager {
@@ -51,10 +61,15 @@ export class ProfileManager {
 
   createProfile(input: CreateProfileInput): Profile {
     const name = input.name.trim();
-    if (!PROFILE_NAME_RE.test(name)) {
+    // isSafeProfileName, not a bare regex test: create has to enforce the
+    // reserved-name rule too, or a "__router__" profile could be created and
+    // then collide with the router's own rows in the shared stores.
+    if (!isSafeProfileName(name)) {
       throw new NanitesError({
         code: "invalid_profile_name",
-        message: "Profile name may only contain letters, digits, '_', '.', '-'",
+        message: RESERVED_PROFILE_NAMES.has(name)
+          ? `Profile name "${name}" is reserved by the router`
+          : "Profile name may only contain letters, digits, '_', '.', '-'",
         retryable: false,
       });
     }

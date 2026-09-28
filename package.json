@@ -14,13 +14,16 @@
     "LICENSE"
   ],
   "bin": {
-    "nanites": "./dist/index.js"
+    "nanites": "./dist/index.js",
+    "nanites-router": "./dist/router/main.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/copy-ui.mjs && node scripts/copy-skill.mjs && node scripts/copy-server.mjs",
     "start": "node dist/index.js",
+    "router": "node dist/router/main.js",
     "ui": "node dist/ui/main.js",
     "dev": "tsx watch src/index.ts",
+    "dev:router": "tsx watch src/router/main.ts",
     "dev:ui": "tsx watch src/ui/main.ts",
     "test": "vitest run",
     "test:watch": "vitest",
