@@ -39,6 +39,11 @@ export function listProviderKeys(deps, provider) {
         provider: prov,
         keys: keys.map((k) => ({
             key_id: k.key_id,
+            // The nickname is the endpoint's name: a generic profile holds many
+            // OpenAI-compatible gateways, and without this the list is a wall of
+            // anonymous URLs. It is also what a `generic:<endpoint>:<model>` id
+            // resolves to when routing.
+            nickname: k.nickname ?? null,
             account_id: k.account_id,
             gateway_url: k.gateway_url,
             is_enabled: k.is_enabled,

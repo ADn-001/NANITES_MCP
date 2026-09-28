@@ -1,4 +1,5 @@
 import { createProviderClient } from "./client.js";
+import { parseModelId } from "../storage/providerModelId.js";
 import { buildCloudChatRequest, chatWithBudgetRetry, planCloudInference } from "./cloudPlanner.js";
 import { ProviderKeyStore } from "../storage/providerKeyStore.js";
 import { ProviderModelStore } from "../storage/providerModelStore.js";
@@ -41,6 +42,19 @@ function delay(ms) {
 }
 async function sleepWithJitter(baseMs) {
     await delay(baseMs + JITTER());
+}
+/**
+ * Does this key belong to the named generic endpoint?
+ *
+ * A generic endpoint IS a key row: its name is the key's nickname, and its base
+ * URL is the key's gateway_url. That is what makes "many endpoints on one
+ * provider" work today with no extra table. So the namespace in the model id
+ * resolves to whichever key the user named, and a key with no nickname can never
+ * match — an unnamed endpoint is not addressable, which is the honest answer
+ * rather than guessing one.
+ */
+function keyMatchesEndpoint(key, endpoint) {
+    return typeof key.nickname === "string" && key.nickname.length > 0 && key.nickname === endpoint;
 }
 /** Route a cloud call with retry and key rotation. */
 export async function routeCloudWithRetry(opts, provider, modelId) {
@@ -110,18 +124,38 @@ export async function routeCloudWithRetry(opts, provider, modelId) {
                     retryable: false,
                 });
             }
+            // A generic model id that names its endpoint
+            // (`generic:<endpoint>:<model>`) belongs to exactly one gateway, so the
+            // pool is that endpoint's key alone. Rotating across every generic key
+            // would send the call to a gateway that may not serve the model at all,
+            // which is the exact failure the namespace exists to prevent. A
+            // gateway whose key is missing or disabled is an honest failure, not a
+            // reason to try a different endpoint.
+            const endpoint = parseModelId(model).endpoint;
+            const scoped = endpoint ? keys.filter((k) => keyMatchesEndpoint(k, endpoint)) : keys;
+            if (endpoint && scoped.length === 0) {
+                throw new NanitesError({
+                    code: "endpoint_not_configured",
+                    message: `Generic endpoint "${endpoint}" has no enabled API key. Add one, or re-register the model without an endpoint prefix.`,
+                    retryable: false,
+                    details: { endpoint, model_id: model },
+                });
+            }
+            const pool0 = scoped.length > 0 ? scoped : keys;
             // Prefer a key this model has not tried yet, but do fall back to a fresh
             // turn for one that has: on a single-key profile there is nothing else to
             // try, and a backoff retry of the same key is exactly what a transient
             // 503 wants.
-            const untried = keys.filter((k) => !tried.has(k.key_id));
-            const pool = untried.length > 0 ? untried : keys;
+            const untried = pool0.filter((k) => !tried.has(k.key_id));
+            const pool = untried.length > 0 ? untried : pool0;
             // Step past the last-used index, then wrap onto a key from the pool. A
-            // fresh profile stores -1, so this lands on keys[0].
+            // fresh profile stores -1, so this lands on the first key. The index runs
+            // over the (possibly endpoint-scoped) pool, so a single-endpoint generic
+            // model always resolves to that endpoint's key.
             cursor += 1;
-            const start = ((cursor % keys.length) + keys.length) % keys.length;
-            const selectedKey = pool.find((k) => keys.indexOf(k) >= start) ?? pool[0];
-            const keyIdx = keys.indexOf(selectedKey);
+            const start = ((cursor % pool0.length) + pool0.length) % pool0.length;
+            const selectedKey = pool.find((k) => pool0.indexOf(k) >= start) ?? pool[0];
+            const keyIdx = pool0.indexOf(selectedKey);
             tried.add(selectedKey.key_id);
             cursor = keyIdx;
             // Outside the try so the failure path can time the attempt it just lost.

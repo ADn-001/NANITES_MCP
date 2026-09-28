@@ -8,6 +8,7 @@
  * params from the effort level.
  */
 import { randomUUID } from "node:crypto";
+import { wireModelId } from "../storage/providerModelId.js";
 import { NanitesError } from "../helpers/errors.js";
 import { PROVIDER_ERROR_CODES } from "./errors.js";
 import { responseFormatFor } from "./outputSchema.js";
@@ -170,11 +171,18 @@ export function isEmptyCloudReply(resp) {
  * `send` is injected so the retry can be exercised without a live provider.
  */
 export async function chatWithBudgetRetry(send, plan, provider, model, messages, systemPrompt, tools, responseFormat) {
-    const resp = await send(buildCloudChatRequest(plan, provider, model, messages, systemPrompt, tools, responseFormat));
+    // A generic model id may carry its endpoint namespace
+    // (`generic:<endpoint>:<model>`) so the router can pin the call to one
+    // gateway. The gateway only knows its own model name, so the prefix is
+    // stripped here — the single place every request body is built, including
+    // the doubled-budget retry below, which is why the router cannot strip it at
+    // its own call site and expect the retry to inherit the fix.
+    const wireModel = wireModelId(model);
+    const resp = await send(buildCloudChatRequest(plan, provider, wireModel, messages, systemPrompt, tools, responseFormat));
     if (!isEmptyCloudReply(resp))
         return resp;
     const doubled = doubleCloudBudget(plan);
-    const retryResp = await send(buildCloudChatRequest(doubled, provider, model, messages, systemPrompt, tools, responseFormat));
+    const retryResp = await send(buildCloudChatRequest(doubled, provider, wireModel, messages, systemPrompt, tools, responseFormat));
     if (!isEmptyCloudReply(retryResp))
         return retryResp;
     throw new NanitesError({

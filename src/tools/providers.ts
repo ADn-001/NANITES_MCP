@@ -25,7 +25,7 @@ function validateProvider(p: string): ProviderKind {
 
 // ---- key management ----
 
-export function addProviderKey(deps: ToolDeps, provider: string, apiKey: string, opts?: { accountId?: string; gatewayUrl?: string }) {
+export function addProviderKey(deps: ToolDeps, provider: string, apiKey: string, opts?: { accountId?: string; gatewayUrl?: string; nickname?: string }) {
   const profile = requireActiveProfile(deps);
   const prov = validateProvider(provider);
   const keyStore = new ProviderKeyStore(deps.db);
@@ -50,6 +50,11 @@ export function listProviderKeys(deps: ToolDeps, provider: string) {
     provider: prov,
     keys: keys.map((k) => ({
       key_id: k.key_id,
+      // The nickname is the endpoint's name: a generic profile holds many
+      // OpenAI-compatible gateways, and without this the list is a wall of
+      // anonymous URLs. It is also what a `generic:<endpoint>:<model>` id
+      // resolves to when routing.
+      nickname: k.nickname ?? null,
       account_id: k.account_id,
       gateway_url: k.gateway_url,
       is_enabled: k.is_enabled,

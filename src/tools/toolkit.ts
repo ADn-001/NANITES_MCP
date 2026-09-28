@@ -467,6 +467,12 @@ const addProviderKeySchema = z.object({
   account_id: z.string().optional(),
   // Validated: this URL decides where the provider API key is sent.
   gateway_url: outboundUrlSchema.optional(),
+  // A user-facing label. This is what makes several endpoints on one provider
+  // distinguishable — `generic` in particular holds many OpenAI-compatible
+  // gateways, and without a name there is no way to tell them apart in the list
+  // or on the board. The store has always persisted it; only this tool failed
+  // to accept it.
+  nickname: z.string().optional(),
 });
 const removeProviderKeySchema = z.object({
   provider: z.enum(["cloudflare", "openrouter", "omniroute", "generic"]),
@@ -960,6 +966,7 @@ function handleAddProviderKey(deps: ToolDeps, args: z.infer<typeof addProviderKe
   return addProviderKey(deps, args.provider, args.api_key, {
     accountId: args.account_id,
     gatewayUrl: args.gateway_url,
+    nickname: args.nickname,
   });
 }
 function handleRemoveProviderKey(deps: ToolDeps, args: z.infer<typeof removeProviderKeySchema>) {
