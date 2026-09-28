@@ -65,6 +65,24 @@ describe("Plugin manifest validation", () => {
     expect(copyScript).toContain("dist");
   });
 
+  it("the build installs the plugin's own runtime dependencies", () => {
+    // A fresh clone has no plugin/nanites/node_modules (it is not tracked), and
+    // the plugin resolves its imports relative to the plugin root — so without
+    // this step the plugin dies at startup with ERR_MODULE_NOT_FOUND on
+    // '@modelcontextprotocol/server'. This was a real, shipped break, found by
+    // cloning the repo and starting the plugin.
+    const copyScript = fs.readFileSync(path.join(ROOT, "scripts", "copy-server.mjs"), "utf8");
+    expect(copyScript).toContain("node_modules");
+    expect(copyScript).toMatch(/npm/);
+  });
+
+  it("does not track generated build output", () => {
+    const ignore = fs.readFileSync(path.join(ROOT, ".gitignore"), "utf8");
+    // Compiled .js in history makes every build a commit full of noise.
+    expect(ignore).toMatch(/^dist\/$/m);
+    expect(ignore).toMatch(/^plugin\/nanites\/dist\/$/m);
+  });
+
   it("plugin.json has settings key", () => {
     const raw = JSON.parse(fs.readFileSync(path.join(PLUGIN_ROOT, ".claude-plugin", "plugin.json"), "utf8"));
     expect(raw.settings).toBeDefined();

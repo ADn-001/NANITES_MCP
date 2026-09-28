@@ -491,6 +491,106 @@ export const MIGRATIONS: Migration[] = [
     sql: "",
     needsImperative: true,
   },
+  {
+    // nanites-router storage. All `router_*` tables live in the SAME database
+    // as the MCP server's, which is the point: the router reuses the provider
+    // key store rather than asking the user to re-enter every provider key in
+    // a second place.
+    //
+    // These tables are NOT profile-scoped. Router config is global (design
+    // decision D3) — a gateway serving remote harnesses has no business
+    // inheriting a local machine profile. The tables that the existing
+    // profile-scoped stores own (provider_api_keys, provider_models) are still
+    // keyed by profile_name, and the router writes them under the reserved
+    // ROUTER_PROFILE name. See src/router/constants.ts.
+    version: 25,
+    sql: `
+      CREATE TABLE IF NOT EXISTS router_config (
+        id                 INTEGER PRIMARY KEY CHECK (id = 1),
+        -- Nullable on purpose: a config row must exist before any key is
+        -- provisioned (port, bind, and strategy live here too), and "no key
+        -- yet" is a real state that a NOT NULL placeholder would have to fake.
+        -- resolveVirtualKey treats NULL as "generate on this boot".
+        virtual_key_hash   TEXT,
+        key_salt           TEXT,
+        port               INTEGER NOT NULL DEFAULT 4800,
+        bind               TEXT NOT NULL DEFAULT '127.0.0.1',
+        default_strategy   TEXT NOT NULL DEFAULT 'round_robin',
+        budget_threshold   REAL NOT NULL DEFAULT 0.9,
+        sticky_ttl_turns   INTEGER NOT NULL DEFAULT 5,
+        enable_model_repair INTEGER NOT NULL DEFAULT 0,
+        enable_helpers     INTEGER NOT NULL DEFAULT 0,
+        tunnel_enabled     INTEGER NOT NULL DEFAULT 0,
+        tunnel_url         TEXT,
+        created_at         TEXT NOT NULL,
+        updated_at         TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS router_key_metrics (
+        provider         TEXT NOT NULL,
+        key_id           TEXT NOT NULL,
+        request_count    INTEGER NOT NULL DEFAULT 0,
+        error_count      INTEGER NOT NULL DEFAULT 0,
+        input_tokens     INTEGER NOT NULL DEFAULT 0,
+        output_tokens    INTEGER NOT NULL DEFAULT 0,
+        spent_usd        REAL,
+        avg_latency_ms   REAL,
+        last_success_at  TEXT,
+        last_failure_at  TEXT,
+        usage_threshold  INTEGER,
+        PRIMARY KEY (provider, key_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS router_aliases (
+        alias        TEXT PRIMARY KEY,
+        candidates   TEXT NOT NULL,
+        sticky_winner INTEGER,
+        created_at   TEXT NOT NULL,
+        updated_at   TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS router_advertised (
+        alias          TEXT PRIMARY KEY,
+        real_id        TEXT NOT NULL,
+        provider       TEXT NOT NULL,
+        modalities     TEXT NOT NULL,
+        context_window INTEGER,
+        created_at     TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS router_modality_pins (
+        source     TEXT NOT NULL,
+        target     TEXT NOT NULL,
+        model      TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (source, target)
+      );
+
+      CREATE TABLE IF NOT EXISTS router_jobs (
+        job_id       TEXT PRIMARY KEY,
+        status       TEXT NOT NULL,
+        source       TEXT NOT NULL,
+        target       TEXT NOT NULL,
+        model        TEXT NOT NULL,
+        progress     REAL,
+        phase        TEXT NOT NULL,
+        artifact_uri TEXT,
+        error        TEXT,
+        request      TEXT NOT NULL,
+        created_at   TEXT NOT NULL,
+        updated_at   TEXT NOT NULL,
+        completed_at TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS router_sticky (
+        model_id   TEXT PRIMARY KEY,
+        provider   TEXT NOT NULL,
+        key_id     TEXT NOT NULL,
+        turns_left INTEGER NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `,
+  },
 ];
 
 export function applyMigrations(db: DatabaseSync): void {
