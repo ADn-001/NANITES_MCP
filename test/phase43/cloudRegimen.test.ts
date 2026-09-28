@@ -182,7 +182,7 @@ describe("cloud deterministic regimen", () => {
     expect(typeof rows[0]!.test_run).toBe("number");
 
     // finalize wrote a provider-tagged registry entry.
-    const entry = d.registry.get("p-det", "@cf/openai/gpt-oss-120b");
+    const entry = d.registry.get("p-det", "@cf/openai/gpt-oss-120b", "cloudflare");
     expect(entry?.provider).toBe("cloudflare");
     expect(entry?.roles).toContain("code_writer");
 
@@ -213,7 +213,7 @@ describe("cloud judged flow", () => {
     expect(rows.every((r) => r.raw_output?.length ?? 0 > 0)).toBe(true);
 
     // Registry not yet written while a unit is pending.
-    expect(d.registry.get("p-judged", "@cf/google/gemma-4-26b-a4b-it")).toBeNull();
+    expect(d.registry.get("p-judged", "@cf/google/gemma-4-26b-a4b-it", "cloudflare")).toBeNull();
 
     // Serial judging: baseline, then the promoted variant. Provider-less submit
     // path must still finalize a cloudflare-tagged entry from the row stamp.
@@ -225,7 +225,7 @@ describe("cloud judged flow", () => {
       orchestrator_notes: "good",
       user_approved: true,
     });
-    expect(d.registry.get("p-judged", "@cf/google/gemma-4-26b-a4b-it")).toBeNull(); // variant still pending
+    expect(d.registry.get("p-judged", "@cf/google/gemma-4-26b-a4b-it", "cloudflare")).toBeNull(); // variant still pending
 
     submitTestJudgment(d, {
       profile: "p-judged",
@@ -235,7 +235,7 @@ describe("cloud judged flow", () => {
       orchestrator_notes: "better",
       user_approved: true,
     });
-    const entry = d.registry.get("p-judged", "@cf/google/gemma-4-26b-a4b-it");
+    const entry = d.registry.get("p-judged", "@cf/google/gemma-4-26b-a4b-it", "cloudflare");
     expect(entry?.provider).toBe("cloudflare");
     expect(entry?.scores.summarizer).toBe(92); // unit collapses to winner (variant 92 > baseline 88)
   });

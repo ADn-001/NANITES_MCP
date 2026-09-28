@@ -42,12 +42,40 @@ export class RegistryStore {
         this.db
             .prepare(`INSERT INTO model_registry (profile_name, model_id, provider, roles, scores, score_minima, best_params, last_tested, performance_score, avg_load_ms, avg_response_ms, reasoning_type, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT (profile_name, model_id) DO UPDATE SET ${updates.join(", ")}`)
+         ON CONFLICT (profile_name, COALESCE(provider, 'local'), model_id) DO UPDATE SET ${updates.join(", ")}`)
             .run(profileName, entry.model_id, entry.provider ?? null, JSON.stringify(entry.roles ?? []), JSON.stringify(entry.scores ?? {}), JSON.stringify(entry.score_minima ?? {}), JSON.stringify(entry.best_params ?? {}), entry.last_tested ?? null, entry.performance_score ?? 50, entry.avg_load_ms ?? null, entry.avg_response_ms ?? null, entry.reasoning_type ?? "unknown", entry.created_at ?? now, now);
     }
-    get(profileName, modelId) {
+    /**
+     * `provider` narrows the lookup now that the same model id can exist on more
+     * than one provider. Omitted, it means the local row (provider IS NULL), which
+     * is what every existing caller wants — a caller that genuinely wants a cloud
+     * row must say which provider, rather than receiving whichever row sorted
+     * first. The COALESCE mirrors the table's uniqueness rule, so "no provider"
+     * can only ever match the local row and never a cloud one.
+     */
+    get(profileName, modelId, provider) {
         const row = this.db
-            .prepare("SELECT * FROM model_registry WHERE profile_name = ? AND model_id = ?")
+            .prepare(`SELECT * FROM model_registry
+          WHERE profile_name = ? AND model_id = ? AND COALESCE(provider, 'local') = ?`)
+            .get(profileName, modelId, provider ?? "local");
+        return row ? this.rowToEntry(row) : null;
+    }
+    /**
+     * Any provider's row for this id. Distinct from get() on purpose: get() means
+     * "the local row" when no provider is given, which is right for the local
+     * paths but silently wrong for a caller that genuinely wants whichever
+     * provider row exists — a retest of a provider-tagged model, or a caller
+     * holding only an id. Prefers the local row when several match so a local
+     * model still reads as local.
+     */
+    getAny(profileName, modelId) {
+        const local = this.get(profileName, modelId);
+        if (local)
+            return local;
+        const row = this.db
+            .prepare(`SELECT * FROM model_registry
+          WHERE profile_name = ? AND model_id = ? AND provider IS NOT NULL
+          ORDER BY provider LIMIT 1`)
             .get(profileName, modelId);
         return row ? this.rowToEntry(row) : null;
     }

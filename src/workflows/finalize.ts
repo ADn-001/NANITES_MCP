@@ -38,7 +38,7 @@ export function finalizeIfComplete(
   const taggedProvider =
     provider ??
     rows.find((r) => r.provider !== null)?.provider ??
-    deps.registry.get(profileName, modelId)?.provider ??
+    deps.registry.getAny(profileName, modelId)?.provider ??
     null;
 
   const entry: RegistryEntry = {

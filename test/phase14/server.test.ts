@@ -57,9 +57,9 @@ describe("GET /api/leaderboard — provider filter", () => {
    * The same-id collision it would otherwise hide is NOT fixed here and is
    * pinned as the known gap: model_registry is keyed (profile_name, model_id)
    * with no provider column in the key, so two providers serving one id
-   * cannot both be stored. That needs the namespacing migration. Whichever
-   * provider was written last is the row that survives, and the filter must
-   * never leak it to the other provider.
+   * cannot both be stored. That is migration 24, which rebuilds the table so
+   * provider is part of the key: both providers' copies now coexist and each
+   * filter sees only its own.
    */
   it("returns only the requested provider and never leaks another provider row", async () => {
     const h = await setup((deps) => {
@@ -76,11 +76,14 @@ describe("GET /api/leaderboard — provider filter", () => {
 
     const or = (await (await fetch(`${h.base}/api/leaderboard?role=all&provider=openrouter`)).json()) as { rows: Row[] };
     expect(or.rows.every((r) => r.provider === "openrouter")).toBe(true);
-    // The row the filter must never hand to openrouter: it belongs to cloudflare.
+    // The same id is registered on both providers, and each sees its own row.
+    expect(or.rows.map((r) => r.model_id)).toContain("shared");
+    // The filter must never hand another provider's row to openrouter.
     expect(or.rows.map((r) => r.model_id)).not.toContain("only-cf");
 
     const all = (await (await fetch(`${h.base}/api/leaderboard?role=all`)).json()) as { rows: Row[] };
-    expect(all.rows.length).toBeGreaterThan(cf.rows.length);
+    // Both copies survive the merge instead of one replacing the other.
+    expect(all.rows.filter((r) => r.model_id === "shared")).toHaveLength(2);
 
     await h.ui.close();
     h.deps.close();

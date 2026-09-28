@@ -75,7 +75,10 @@ describe("a partial write preserves untouched columns", () => {
       last_tested: null,
     });
     // The score write path carries provider forward; assert it stays set.
-    const existing = h.registry.get("t", "m");
+    // Since migration 24 a bare get() addresses the LOCAL row, so the cloud
+    // row is read and written under its own provider.
+    const existing = h.registry.get("t", "m", "cloudflare");
+    expect(existing?.provider, "fixture should have a cloudflare row").toBe("cloudflare");
     h.registry.upsert("t", {
       model_id: "m",
       provider: existing?.provider ?? null,
@@ -85,8 +88,11 @@ describe("a partial write preserves untouched columns", () => {
       last_tested: null,
       performance_score: 77,
     });
-    expect(h.registry.get("t", "m")?.provider).toBe("cloudflare");
-    expect(h.registry.get("t", "m")?.performance_score).toBe(77);
+    expect(h.registry.get("t", "m", "cloudflare")?.provider).toBe("cloudflare");
+    expect(h.registry.get("t", "m", "cloudflare")?.performance_score).toBe(77);
+    // And the bare id does NOT resolve to the cloud row: with no local row
+    // present the lookup finds nothing rather than falling through to cloud.
+    expect(h.registry.get("t", "m")).toBeNull();
     h.done();
   });
 

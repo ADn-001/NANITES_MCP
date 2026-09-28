@@ -91,15 +91,15 @@ describe("Phase 44 — seed_provider_models tool", () => {
     expect(reg.list("t")).toHaveLength(CLOUDFLARE_AGENT_MANIFEST.length);
     expect(reg.listLocal("t")).toHaveLength(0); // never visible to local selection
     for (const seed of CLOUDFLARE_AGENT_MANIFEST) {
-      const e = reg.get("t", seed.model_id)!;
+      const e = reg.get("t", seed.model_id, "cloudflare")!;
       expect(e.provider).toBe("cloudflare");
       expect(e.last_tested).toBeNull();
       expect(Object.values(e.scores)).toHaveLength(0);
       for (const role of seed.roles) expect(e.roles).toContain(role);
     }
-    const gem = reg.get("t", GEM)!;
+    const gem = reg.get("t", GEM, "cloudflare")!;
     expect(gem.roles).toContain("vision");
-    expect(reg.get("t", VLM)!.roles).toEqual(["vision"]);
+    expect(reg.get("t", VLM, "cloudflare")!.roles).toEqual(["vision"]);
 
     // Default pins written for the six seeded roles + vision.
     const pins = new RolePinStore(h.deps.db).list("t");
@@ -137,7 +137,7 @@ describe("Phase 44 — seed_provider_models tool", () => {
     const data = res.data as { role_tagged: string[]; role_tags_tested_kept: string[] };
     expect(data.role_tags_tested_kept).toEqual([GPT]);
     expect(data.role_tagged).toEqual([]);
-    const entry = h.deps.registry.get("t", GPT)!;
+    const entry = h.deps.registry.get("t", GPT, "cloudflare")!;
     expect(entry.scores.code_writer).toBe(80); // real evidence survived
     expect(entry.last_tested).not.toBeNull();
   });

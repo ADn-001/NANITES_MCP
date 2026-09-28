@@ -90,7 +90,10 @@ export function seedProviderModels(deps, input) {
         models_registered.push({ model_id: seed.model_id, roles: seed.roles, vision: seed.vision });
         // Role-tag in the registry — D5/D6 (vision models auto-carry the vision
         // role via the manifest). Never clobber a tested entry's real scores.
-        const existing = registry.get(profile.name, model);
+        // The seed runs per provider, so the registry lookup is scoped to that
+        // provider too — otherwise a local placeholder of the same id would be
+        // mistaken for this provider's already-tagged row.
+        const existing = registry.get(profile.name, model, prov);
         if (isPlaceholder(existing)) {
             // Idempotence: a placeholder already role-tagged with these exact roles
             // needs no rewrite on re-seed — only genuinely new/divergent tags upsert.

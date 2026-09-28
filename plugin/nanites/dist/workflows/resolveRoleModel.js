@@ -83,8 +83,8 @@ function bestRegisteredModel(deps, profile, provider, capable) {
         .filter((m) => capable(m.capabilities));
     if (models.length === 0)
         return null;
-    models.sort((a, b) => (deps.registry.get(profile.name, b.model_id)?.performance_score ?? -1) -
-        (deps.registry.get(profile.name, a.model_id)?.performance_score ?? -1) ||
+    models.sort((a, b) => (deps.registry.get(profile.name, b.model_id, provider)?.performance_score ?? -1) -
+        (deps.registry.get(profile.name, a.model_id, provider)?.performance_score ?? -1) ||
         a.model_id.localeCompare(b.model_id));
     return models[0].model_id;
 }
@@ -181,7 +181,8 @@ function resolveVisionModel(deps, profile, input) {
         retryable: false,
     });
 }
-/** Local pin is usable: the model has a local registry entry. */
+/** Local pin is usable: the model has a local registry entry. Local rows are
+ *  the provider IS NULL ones, so the two-argument get() is exactly right here. */
 function localModelUsable(deps, profile, modelId) {
     return deps.registry.get(profile.name, modelId) !== null;
 }

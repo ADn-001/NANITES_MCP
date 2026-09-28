@@ -449,6 +449,28 @@ export const MIGRATIONS = [
         sql: "", // created idempotently in applyMigrations (see migration 23)
         needsImperative: true,
     },
+    {
+        // model_registry was keyed (profile_name, model_id) with provider as a
+        // plain column, so two providers serving the same model id could never
+        // both be stored - the second upsert silently replaced the first, and the
+        // board then lost whichever provider it was not. Provider is part of a
+        // model identity here, exactly as it already is in provider_models.
+        //
+        // SQLite treats NULLs as distinct in a UNIQUE index, and every LOCAL model
+        // has provider NULL, so a plain UNIQUE (profile, provider, model_id) would
+        // let duplicate local rows in. The COALESCE expression index gives local
+        // rows one non-null sentinel, so they dedupe normally while cloud rows stay
+        // separated by provider.
+        //
+        // The table itself has to be rebuilt: adding the index is not enough,
+        // because the old PRIMARY KEY (profile_name, model_id) still rejects the
+        // second provider's row before the new index is ever consulted. The new
+        // table therefore carries no PRIMARY KEY, leaving the expression index as
+        // the single uniqueness rule that the upsert's conflict target names.
+        version: 24,
+        sql: "",
+        needsImperative: true,
+    },
 ];
 export function applyMigrations(db) {
     const row = db.prepare("PRAGMA user_version").get();
@@ -565,6 +587,60 @@ export function applyMigrations(db) {
                         db.exec("ALTER TABLE jobs ADD COLUMN heartbeat_at TEXT");
                     }
                     db.exec("CREATE INDEX IF NOT EXISTS idx_jobs_status_heartbeat ON jobs (status, heartbeat_at)");
+                }
+            }
+            else if (migration.version === 24) {
+                // Idempotent: the presence of the expression index is the signal that
+                // this has already run, so a re-run is a no-op.
+                //
+                // The rebuild is the only correct shape here. Creating the index alone
+                // does not work — the old PRIMARY KEY (profile_name, model_id) rejects
+                // the second provider's row before the index is consulted, so the
+                // conflict never reaches the upsert target. Dropping the PRIMARY KEY and
+                // letting the COALESCE index be the only uniqueness rule is what lets
+                // two providers coexist while local (NULL) rows still dedupe.
+                const table = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?")
+                    .get("model_registry");
+                const alreadyMigrated = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?").get("idx_model_registry_provider_model") !== undefined;
+                if (table && !alreadyMigrated) {
+                    const cols = db.prepare("PRAGMA table_info(model_registry)").all();
+                    const names = new Set(cols.map((c) => c.name));
+                    // Copy only columns the live table actually has, so a profile that
+                    // never ran a later ALTER still migrates instead of failing on a
+                    // missing column.
+                    const carried = [
+                        "profile_name", "model_id", "provider", "roles", "scores", "score_minima",
+                        "best_params", "last_tested", "performance_score", "avg_load_ms",
+                        "avg_response_ms", "reasoning_type", "created_at", "updated_at",
+                    ].filter((c) => names.has(c));
+                    const defs = carried.map((c) => {
+                        if (c === "profile_name" || c === "model_id")
+                            return `${c} TEXT NOT NULL`;
+                        if (c === "created_at" || c === "updated_at")
+                            return `${c} TEXT NOT NULL DEFAULT ''`;
+                        if (c === "roles")
+                            return "roles TEXT NOT NULL DEFAULT '[]'";
+                        if (c === "scores" || c === "score_minima")
+                            return `${c} TEXT NOT NULL DEFAULT '{}'`;
+                        if (c === "best_params")
+                            return "best_params TEXT NOT NULL DEFAULT '{}'";
+                        if (c === "performance_score")
+                            return "performance_score INTEGER NOT NULL DEFAULT 50";
+                        // The averages are REAL, not TEXT. Declaring them with the generic
+                        // fallback made SQLite store 1200 as "1200.0" and the partial-write
+                        // suite caught the read-back type change.
+                        if (c === "avg_load_ms" || c === "avg_response_ms")
+                            return `${c} REAL`;
+                        return `${c} TEXT`;
+                    });
+                    db.exec("DROP TABLE IF EXISTS model_registry_rebuild");
+                    db.exec(`CREATE TABLE model_registry_rebuild (${defs.join(", ")})`);
+                    db.exec(`INSERT INTO model_registry_rebuild (${carried.join(", ")})
+                   SELECT ${carried.join(", ")} FROM model_registry`);
+                    db.exec("DROP TABLE model_registry");
+                    db.exec("ALTER TABLE model_registry_rebuild RENAME TO model_registry");
+                    db.exec(`CREATE UNIQUE INDEX idx_model_registry_provider_model
+                     ON model_registry (profile_name, COALESCE(provider, 'local'), model_id)`);
                 }
             }
             else {

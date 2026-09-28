@@ -36,6 +36,71 @@ afterAll(() => {
   }
 });
 
+/**
+ * Migration 24 — provider becomes part of a model's identity.
+ *
+ * model_registry was keyed (profile_name, model_id) with `provider` as an
+ * ordinary column, so two providers serving the same model id could never both
+ * be stored: the second upsert replaced the first. That is what made a
+ * provider's registered count and the board's row count disagree, and what
+ * would drop one provider's copy of a model from the leaderboard.
+ *
+ * Creating the index alone does not fix it — the old PRIMARY KEY rejects the
+ * second row before the index is consulted — so the table is rebuilt with no
+ * PRIMARY KEY, leaving a COALESCE(provider, 'local') expression index as the
+ * only uniqueness rule. COALESCE rather than a plain column because every LOCAL
+ * row has provider NULL, and SQLite treats NULLs as distinct in a UNIQUE index,
+ * so a plain index would permit duplicate local rows.
+ */
+describe("migration v24 — model_registry keys on provider as well as id", () => {
+  it("stores the same model id on two providers without either replacing the other", () => {
+    const home = scratchHome();
+    const d = buildDeps(home);
+    try {
+      d.registry.upsert("t", { model_id: "shared", provider: "cloudflare", roles: ["reviewer"], scores: {}, best_params: {}, last_tested: null });
+      d.registry.upsert("t", { model_id: "shared", provider: "openrouter", roles: ["summarizer"], scores: {}, best_params: {}, last_tested: null });
+
+      expect(d.registry.get("t", "shared", "cloudflare")?.roles).toEqual(["reviewer"]);
+      expect(d.registry.get("t", "shared", "openrouter")?.roles).toEqual(["summarizer"]);
+      const rows = d.db.prepare("SELECT provider FROM model_registry WHERE model_id = 'shared'").all();
+      expect(rows).toHaveLength(2);
+    } finally {
+      d.close();
+      cleanup(home);
+    }
+  });
+
+  it("still collapses a repeated write to the same provider and id", () => {
+    const home = scratchHome();
+    const d = buildDeps(home);
+    try {
+      d.registry.upsert("t", { model_id: "m", provider: "cloudflare", roles: ["a"], scores: {}, best_params: {}, last_tested: null });
+      d.registry.upsert("t", { model_id: "m", provider: "cloudflare", roles: ["b"], scores: {}, best_params: {}, last_tested: null });
+      const rows = d.db.prepare("SELECT roles FROM model_registry WHERE model_id = 'm'").all();
+      expect(rows).toHaveLength(1);
+      expect(d.registry.get("t", "m", "cloudflare")?.roles).toEqual(["b"]);
+    } finally {
+      d.close();
+      cleanup(home);
+    }
+  });
+
+  it("treats two local writes as one row, since provider is NULL for local", () => {
+    const home = scratchHome();
+    const d = buildDeps(home);
+    try {
+      d.registry.upsert("t", { model_id: "local-m", roles: ["a"], scores: {}, best_params: {}, last_tested: null });
+      d.registry.upsert("t", { model_id: "local-m", roles: ["b"], scores: {}, best_params: {}, last_tested: null });
+      const rows = d.db.prepare("SELECT roles FROM model_registry WHERE model_id = 'local-m'").all();
+      expect(rows).toHaveLength(1);
+      expect(d.registry.get("t", "local-m")?.roles).toEqual(["b"]);
+    } finally {
+      d.close();
+      cleanup(home);
+    }
+  });
+});
+
 describe("migration v17", () => {
   it("fresh DB applies to the current top version with provider column + role_pins", () => {
     const d = harness();
@@ -133,13 +198,15 @@ describe("registry provider round-trip", () => {
       best_params: {},
     });
 
+    // A cloud row is now addressed by its provider: the same model id can
+    // exist on more than one provider, so the id alone is not an identity.
     expect(reg.get("p", "local-model")?.provider).toBeNull();
-    expect(reg.get("p", "@cf/openai/gpt-oss-120b")?.provider).toBe("cloudflare");
+    expect(reg.get("p", "@cf/openai/gpt-oss-120b", "cloudflare")?.provider).toBe("cloudflare");
 
     const all = reg.list("p").map((e) => e.model_id);
     expect(all).toEqual(expect.arrayContaining(["local-model", "@cf/openai/gpt-oss-120b"]));
     // Cloud entry keeps its scores/roles machinery identical to local.
-    expect(reg.get("p", "@cf/openai/gpt-oss-120b")?.scores.code_writer).toBe(80);
+    expect(reg.get("p", "@cf/openai/gpt-oss-120b", "cloudflare")?.scores.code_writer).toBe(80);
 
     const localOnly = reg.listLocal("p").map((e) => e.model_id);
     expect(localOnly).toEqual(["local-model"]);

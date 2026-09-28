@@ -554,10 +554,12 @@ function handleReadRegistry(deps, args) {
     // converge on role-keyed scores + score_minima. Idempotent and no-op when
     // nothing is malformed, keeping the common read path read-only.
     backfillScores(deps, args.profile, roleVocabulary(deps, args.profile));
+    // A single-model read takes only an id, which no longer identifies a row on
+    // its own now that provider is part of the key. getAny() prefers the local
+    // row and falls back to whichever provider row exists, so a cloud model is
+    // still readable by its bare id.
     const entries = args.model_id
-        ? deps.registry.get(args.profile, args.model_id)
-            ? [deps.registry.get(args.profile, args.model_id)]
-            : []
+        ? (() => { const e = deps.registry.getAny(args.profile, args.model_id); return e ? [e] : []; })()
         : deps.registry.list(args.profile);
     return {
         entries: entries.map((e) => {
@@ -571,7 +573,10 @@ function handleReadRegistry(deps, args) {
     };
 }
 function handleWriteRegistryEntry(deps, args) {
-    const existing = deps.registry.get(args.profile, args.model_id);
+    // Same reasoning as the read path: the write names a model by id, so it must
+    // find that model's existing row wherever it lives, and carry its provider
+    // forward so a cloud entry is not silently re-tagged local.
+    const existing = deps.registry.getAny(args.profile, args.model_id);
     // E5-side validation against the profile's role vocabulary (built-in roles +
     // registered test-unit roles). Rejects unit-id keys, unknown role keys, and
     // out-of-range values so the role-keyed aggregation cannot be re-broken by
@@ -619,7 +624,7 @@ function handleWriteRegistryEntry(deps, args) {
         last_tested: merged.last_tested ?? existing?.last_tested ?? null,
         ...(existing ? { performance_score: existing.performance_score, avg_load_ms: existing.avg_load_ms, avg_response_ms: existing.avg_response_ms, reasoning_type: existing.reasoning_type } : {}),
     });
-    return deps.registry.get(args.profile, args.model_id);
+    return deps.registry.getAny(args.profile, args.model_id);
 }
 /**
  * G2 cross-profile share. Opt-in only: copy a source profile's approved

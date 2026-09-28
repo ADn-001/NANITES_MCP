@@ -15,7 +15,7 @@ export function finalizeIfComplete(deps, profileName, modelId, provider) {
     // registry entry (a retest of a provider-tagged model). Defaults to local.
     const taggedProvider = provider ??
         rows.find((r) => r.provider !== null)?.provider ??
-        deps.registry.get(profileName, modelId)?.provider ??
+        deps.registry.getAny(profileName, modelId)?.provider ??
         null;
     const entry = {
         model_id: modelId,
