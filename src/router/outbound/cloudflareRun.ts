@@ -24,6 +24,7 @@ import { findCfModel, type CfModelDef } from "../providers/cloudflare/catalog.js
 import { buildRunBody, decodeRunResponse, runUrl, type CfArtifact } from "../providers/cloudflare/run.js";
 import type { IRRequest, IRResponse } from "../ir/types.js";
 import type { ResolvedTarget } from "./resolve.js";
+import { selectKey } from "./dispatch.js";
 
 /**
  * True when this model must go through /ai/run rather than the chat shim.
@@ -67,43 +68,25 @@ export interface CfDispatchResult {
   latency_ms: number;
 }
 
-function selectKey(db: DatabaseSync, provider: ProviderKind, keyId?: string) {
-  const keyStore = new ProviderKeyStore(db);
-  const available = keyStore.availableKeys(ROUTER_PROFILE, provider);
-  if (keyId) {
-    const found = available.find((k) => k.key_id === keyId);
-    if (found) return found;
-  }
-  if (available.length === 0) {
-    throw new NanitesError({
-      code: "provider_key_required",
-      message: `Provider "${provider}" has no enabled, un-exhausted key.`,
-      retryable: false,
-      details: { provider },
-    });
-  }
-  return available[0]!;
-}
-
 export async function dispatchCfRun(input: CfDispatchInput): Promise<CfDispatchResult> {
-  const { db, target, request } = input;
+  const { db, target } = input;
   const model = findCfModel(target.model_id);
 
-  // A model we have no request shape for is a hard stop, not a guess. The
-  // registry is what makes a modality routable at all, and an unknown model
-  // has no verified body.
+  // A model we have no request shape for is a hard stop. Deliberately
+  // `alias_unknown`, NOT `modality_unsupported`: a model that is not in the
+  // registry at all is almost always a typo or something never discovered, and
+  // blaming modality sends an operator to look in the wrong place.
   if (!model) {
     throw new NanitesError({
-      code: "modality_unsupported",
-      message: `No verified Workers AI request shape for "${target.model_id}". It may not be in the free-tier registry.`,
+      code: "alias_unknown",
+      message: `Unknown Cloudflare model "${target.model_id}". It is not in the free-tier registry — run discovery, or check the id.`,
       retryable: false,
       details: { model_id: target.model_id, provider: target.provider },
     });
   }
 
-  // An unverified model is reachable only by naming it explicitly AND only
-  // after a probe confirmed the shape. Until then it is refused with a
-  // message that says why, rather than being offered and then 400ing.
+  // A model whose shape was never confirmed is refused with an explanation,
+  // rather than being offered and then 400ing on use.
   if (model.unverified) {
     throw new NanitesError({
       code: "modality_unsupported",
@@ -113,84 +96,152 @@ export async function dispatchCfRun(input: CfDispatchInput): Promise<CfDispatchR
     });
   }
 
-  const key = selectKey(db, target.provider, input.key_id);
-  if (!key.account_id) {
-    throw new NanitesError({
-      code: "provider_auth_error",
-      message: "A Cloudflare key requires an account_id.",
-      retryable: false,
-      details: { provider: target.provider },
-    });
-  }
+  const body = buildRunBody(model, request0Of(input));
+  const budgetMs = resolveTimeout(input.request, input.timeout_ms);
 
-  const base = key.gateway_url ?? "https://api.cloudflare.com/client/v4";
-  const body = buildRunBody(model, request);
+  const attempted = new Set<string>();
+  const reasons: Array<{ key_id: string; code: string; message: string }> = [];
 
-  const started = Date.now();
-  const budgetMs = resolveTimeout(request, input.timeout_ms);
+  // Key-scoped failures walk to the next key, as the chat path does. This path
+  // had NO failover at all: it picked one key, so a single spent account failed
+  // every request while five healthy accounts sat unused. Scoped to the named
+  // provider (decision D5).
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const key = input.key_id
+      ? selectKey(db, target, input.key_id)
+      : nextAvailableKey(db, target, attempted);
+    if (!key) break;
+    attempted.add(key.key_id);
 
-  // The caller's budget and the client's patience race each other. Whichever
-  // fires first ends the request, and neither is a provider fault.
-  const budget = AbortSignal.timeout(budgetMs);
-  const composite = input.signal
-    ? AbortSignal.any([budget, input.signal])
-    : budget;
-
-  let res: Response;
-  try {
-    res = await fetch(runUrl(base, key.account_id, model.id), {
-      method: "POST",
-      headers: { Authorization: `Bearer ${key.api_key}`, "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal: composite,
-    });
-  } catch (err) {
-    // A client that hung up is not an error to report to anyone — it is the
-    // request being cancelled, and the caller is already gone.
-    if (input.signal?.aborted) {
+    if (!key.account_id) {
       throw new NanitesError({
-        code: "request_cancelled",
-        message: "The client disconnected before the generation finished.",
+        code: "provider_auth_error",
+        message: "A Cloudflare key requires an account_id.",
         retryable: false,
-        details: { model_id: model.id },
+        details: { provider: target.provider },
       });
     }
-    const isTimeout = err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
-    if (isTimeout) {
-      // A timeout on a generation model is usually a SLOW model, not a broken
-      // one, so the message says so and says what to do. A caller who hits
-      // this on a 20-step SDXL render should raise the budget, not retry
-      // blindly against a model that is working.
-      throw new NanitesError({
-        code: "provider_timeout",
-        message: `${model.id} did not answer within ${Math.round(budgetMs / 1000)}s. ` +
-          `This model is slow rather than unavailable — retry with a higher ` +
-          `"timeout_ms" if the request is a large render.`,
+
+    const base = key.gateway_url ?? "https://api.cloudflare.com/client/v4";
+    const started = Date.now();
+    // The caller's budget and the client's patience race each other.
+    const budget = AbortSignal.timeout(budgetMs);
+    const composite = input.signal ? AbortSignal.any([budget, input.signal]) : budget;
+
+    let res: Response;
+    try {
+      res = await fetch(runUrl(base, key.account_id, model.id), {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key.api_key}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: composite,
+      });
+    } catch (err) {
+      // A client that hung up is a cancellation, not a failure to report.
+      if (input.signal?.aborted) {
+        throw new NanitesError({
+          code: "request_cancelled",
+          message: "The client disconnected before the generation finished.",
+          retryable: false,
+          details: { model_id: model.id },
+        });
+      }
+      const isTimeout = err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
+      if (isTimeout) {
+        // A timeout on a generation model is usually a SLOW model, not a broken
+        // one, and the message has to say so: the right response is a larger
+        // budget, not a blind retry against a model that is working.
+        throw new NanitesError({
+          code: "provider_timeout",
+          message: `${model.id} did not answer within ${Math.round(budgetMs / 1000)}s. ` +
+            `This model is slow rather than unavailable — retry with a higher ` +
+            `"timeout_ms" if the request is a large render.`,
+          retryable: true,
+          details: { model_id: model.id, category: model.category, timeout_ms: budgetMs },
+        });
+      }
+      // The URL carries the account id, so it must not appear in the message.
+      const netErr: NanitesError = new NanitesError({
+        code: "provider_network_error",
+        message: `Could not reach Workers AI: ${err instanceof Error ? err.message : String(err)}`,
         retryable: true,
-        details: { model_id: model.id, category: model.category, timeout_ms: budgetMs },
       });
+      reasons.push({ key_id: key.key_id, code: netErr.code, message: netErr.message });
+      break;
     }
-    // The URL carries the account id, so it must not appear in the message.
-    throw new NanitesError({
-      code: "provider_network_error",
-      message: `Could not reach Workers AI: ${err instanceof Error ? err.message : String(err)}`,
-      retryable: true,
-    });
+
+    if (!res.ok) {
+      const raw = await res.text();
+      const err = await classifyRunError(res.status, raw, model);
+      reasons.push({ key_id: key.key_id, code: err.code, message: err.message });
+      // A shape rejection is about the BODY, not the account, so another key
+      // fails identically. Only key-scoped codes advance.
+      if (!KEY_SCOPED.has(err.code)) throw err;
+      retireKey(db, target.provider, key.key_id, err.code);
+      continue;
+    }
+
+    const decoded = await decodeRunResponse(res, model, Date.now() - started);
+    return {
+      text: decoded.text,
+      artifact: decoded.artifact,
+      served_by: { provider: target.provider, model_id: target.model_id, key_id: key.key_id },
+      latency_ms: decoded.latency_ms,
+    };
   }
 
-  if (!res.ok) {
-    const raw = await res.text();
-    const err = await classifyRunError(res.status, raw, model);
-    throw err;
-  }
+  // The per-key reasons go IN the message, not only in `details`. An operator
+  // reading a 402 needs to see that the cause was a spent allocation, and
+  // `details` is not surfaced to a harness that only prints the error text.
+  const cause = reasons[0]?.code ?? "unknown";
+  throw new NanitesError({
+    code: "all_keys_exhausted",
+    message: `Every key on provider "${target.provider}" failed for ${model.id} (${reasons.length} tried). `
+      + `First reason: ${cause}. ${reasons[0]?.message?.slice(0, 160) ?? ""}`.trim(),
+    retryable: true,
+    details: { provider: target.provider, model_id: model.id, reasons },
+  });
+}
 
-  const decoded = await decodeRunResponse(res, model, Date.now() - started);
-  return {
-    text: decoded.text,
-    artifact: decoded.artifact,
-    served_by: { provider: target.provider, model_id: target.model_id, key_id: key.key_id },
-    latency_ms: decoded.latency_ms,
-  };
+function request0Of(input: CfDispatchInput) {
+  return input.request;
+}
+
+/** The next un-attempted key on the named provider, or null when none is left. */
+function nextAvailableKey(
+  db: DatabaseSync,
+  target: ResolvedTarget,
+  attempted: Set<string>,
+): ReturnType<typeof selectKey> | null {
+  for (let i = 0; i < 12; i++) {
+    let key;
+    try {
+      key = selectKey(db, target);
+    } catch {
+      return null;
+    }
+    if (!attempted.has(key.key_id)) return key;
+  }
+  return null;
+}
+
+/** Key-scoped codes, mirroring providers/errors.ts KEY_SCOPED_CODES. */
+const KEY_SCOPED = new Set([
+  "provider_auth_error",
+  "provider_forbidden",
+  "provider_insufficient_credits",
+  "provider_quota_exhausted",
+  "provider_rate_limited",
+]);
+
+/** Retire a key: a spent allocation lasts until midnight, others for a day. */
+function retireKey(db: DatabaseSync, provider: ProviderKind, keyId: string, code: string): void {
+  const until = code === "provider_quota_exhausted"
+    ? new Date(Date.UTC(
+        new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate() + 1, 0, 0, 0, 0,
+      ))
+    : new Date(Date.now() + 24 * 60 * 60 * 1000);
+  new ProviderKeyStore(db).exhaustKey(ROUTER_PROFILE, provider, keyId, until);
 }
 
 /** The default ceiling. Generous enough for the slowest model measured live. */
@@ -217,7 +268,7 @@ export function resolveTimeout(request: IRRequest, requested?: number): number {
 }
 
 /** Map a Workers AI failure onto the existing provider error taxonomy. */
-async function classifyRunError(status: number, raw: string, model: CfModelDef): Promise<NanitesError> {
+export async function classifyRunError(status: number, raw: string, model: CfModelDef): Promise<NanitesError> {
   let message = raw.slice(0, 300);
   let cfCode: number | undefined;
   try {
@@ -246,6 +297,15 @@ async function classifyRunError(status: number, raw: string, model: CfModelDef):
     return new NanitesError({ code: "provider_model_not_found", message, retryable: false });
   }
   if (status === 429) {
+    // Cloudflare returns 429 for BOTH a transient rate limit and a spent
+    // daily allocation. The message distinguishes them, and the difference
+    // matters: a quota key is done until midnight and must be RETIRED, while
+    // a rate limit is worth retrying. Reading every 429 as a rate limit left a
+    // dead key in the rotation forever.
+    const exhausted = /used up|allocation|quota|insufficient/i.test(message);
+    if (exhausted) {
+      return new NanitesError({ code: "provider_quota_exhausted", message, retryable: false });
+    }
     return new NanitesError({ code: "provider_rate_limited", message, retryable: true });
   }
 

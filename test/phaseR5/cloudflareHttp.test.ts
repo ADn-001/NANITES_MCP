@@ -197,6 +197,10 @@ describe("over HTTP", () => {
     // router must refuse rather than guess one. Guessing produces a
     // confident-looking 400 that costs a round trip and tells the operator
     // nothing useful.
+    //
+    // The code is `alias_unknown`, NOT `modality_unsupported`: a model that is
+    // not in the registry at all is a typo or something never discovered, and
+    // blaming modality sends an operator to look in the wrong place.
     const h = await harness(["@cf/not-in-the-registry/some-model"]);
     stubCloudflare(h.seen, () => new Response("{}", { headers: { "content-type": "application/json" } }));
 
@@ -206,8 +210,8 @@ describe("over HTTP", () => {
     });
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: { code: string; message: string } };
-    expect(body.error.code).toBe("modality_unsupported");
-    expect(body.error.message).toMatch(/no verified workers ai request shape/i);
+    expect(body.error.code).toBe("alias_unknown");
+    expect(body.error.message).toMatch(/not in the free-tier registry/i);
     // Refused WITHOUT contacting Workers AI, so it costs nothing.
     expect(h.seen).toHaveLength(0);
   });
@@ -240,12 +244,14 @@ describe("over HTTP", () => {
       model: "cloudflare:@cf/black-forest-labs/flux-1-schnell",
       messages: [{ role: "user", content: "x" }],
     });
+    // A quota error is KEY-SCOPED, so the run path retires that key and walks
+    // to the next one. With the stub failing every key, the request ends as
+    // all_keys_exhausted — which is the correct, honest outcome: the account
+    // is spent, and no other account is configured in this test.
     expect(res.status).toBe(402);
     const body = (await res.json()) as { error: { code: string; message: string } };
-    // The measured Cloudflare code maps onto the EXISTING taxonomy rather than
-    // a router-specific one, so the same retry/rotate logic that handles it in
-    // the MCP server handles it here.
-    expect(body.error.code).toBe("provider_quota_exhausted");
+    expect(body.error.code).toBe("all_keys_exhausted");
+    // The REASON is preserved, so an operator can see it was quota.
     expect(body.error.message).toContain("quota gone");
   });
 

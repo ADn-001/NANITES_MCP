@@ -8,6 +8,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { createProviderClient, readErrorBody, readSseLines, serializeChatRequest } from "../../providers/client.js";
 import { buildCloudChatRequest, planCloudInference } from "../../providers/cloudPlanner.js";
+import { wireModelId } from "../../storage/providerModelId.js";
 import { mapFetchError, mapHttpStatus } from "../../providers/errors.js";
 import { NanitesError } from "../../helpers/errors.js";
 import type { ProviderKind } from "../../storage/profileDefaults.js";
@@ -90,7 +91,7 @@ export async function openUpstreamStream(input: Omit<StreamDispatchInput, "onEve
   const req = buildCloudChatRequest(
     effectivePlan,
     target.provider,
-    target.stored_id,
+    wireModelId(target.stored_id),
     irMessagesToChat(request),
     undefined,
     irToolsToProviderTools(request.tools),
@@ -210,9 +211,12 @@ export async function dispatchStream(input: StreamDispatchInput): Promise<Stream
   const req = buildCloudChatRequest(
     effectivePlan,
     target.provider,
-    // The strip belongs to buildCloudChatRequest, so passing the stored id
-    // here means the gateway only ever sees its own model name.
-    target.stored_id,
+    // The strip belongs HERE, not in chatWithBudgetRetry. The non-streaming
+    // path goes through that function and gets it for free; this path does
+    // not, and was sending `cloudflare:@cf/meta/...` straight to the provider,
+    // which answers "No such model". Caught only by the E2E — every stubbed
+    // test used a bare id, so the namespaced form was never exercised.
+    wireModelId(target.stored_id),
     messages,
     undefined,
     tools,

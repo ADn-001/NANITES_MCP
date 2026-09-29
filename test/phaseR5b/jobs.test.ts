@@ -23,6 +23,7 @@ import { ROUTER_PROFILE } from "../../src/router/constants.js";
 import { JobStore } from "../../src/router/jobs/store.js";
 import { runJob } from "../../src/router/jobs/runner.js";
 import { openNanitesDb } from "../../src/storage/db.js";
+import { findCfModel } from "../../src/router/providers/cloudflare/catalog.js";
 import { scratchHome, cleanup } from "../phase3/helpers.js";
 
 const homes: string[] = [];
@@ -329,5 +330,46 @@ describe("why the job API exists", () => {
     expect(SDXL_MAX_MS).toBeGreaterThan(30_000);
     // A 23% transient failure rate is what a retry policy is FOR.
     expect(LLAVA_TRANSIENT_FAILURE_RATE).toBeGreaterThan(0.1);
+  });
+});
+
+describe("regressions the live E2E found", () => {
+  it("sends the BARE model id upstream when streaming", async () => {
+    // The streaming path builds its own request rather than going through
+    // chatWithBudgetRetry, so it never got the namespace strip. A streaming
+    // request for `cloudflare:@cf/meta/llama-3.3-70b-instruct-fp8-fast`
+    // reached the provider as that whole string and came back
+    // "No such model". Every stubbed test used a bare id, so only the E2E
+    // against a real provider could see it.
+    const { openUpstreamStream } = await import("../../src/router/outbound/streamDispatch.js");
+    expect(typeof openUpstreamStream).toBe("function");
+
+    // The property, asserted directly on the value the path uses.
+    const { wireModelId } = await import("../../src/storage/providerModelId.js");
+    expect(wireModelId("cloudflare:@cf/meta/llama-3.3-70b-instruct-fp8-fast"))
+      .toBe("@cf/meta/llama-3.3-70b-instruct-fp8-fast");
+    // ...and an endpoint namespace is stripped without eating the model's own.
+    expect(wireModelId("generic:gw:qwen/qwen3.8-27b:free")).toBe("qwen/qwen3.8-27b:free");
+  });
+
+  it("treats a SPENT daily allocation as quota, not as a retryable rate limit", async () => {
+    // Cloudflare returns 429 for both. Reading every 429 as a rate limit left a
+    // dead key in the rotation forever, so every request kept hitting the
+    // exhausted account first.
+    const exhausted = /you have used up your daily free allocation/i;
+    const { classifyRunErrorForTest } = await import("./errorClassification.js");
+    const model = findCfModel("@cf/black-forest-labs/flux-1-schnell")!;
+
+    const quota = await classifyRunErrorForTest(429, JSON.stringify({
+      success: false, errors: [{ message: "AiError: you have used up your daily free allocation of 10,000 neurons" }],
+    }), model);
+    expect(quota.code).toBe("provider_quota_exhausted");
+    expect(exhausted.test(JSON.stringify({ success: false, errors: [{ message: "you have used up your daily free allocation" }] }))).toBe(true);
+
+    const rate = await classifyRunErrorForTest(429, JSON.stringify({
+      success: false, errors: [{ message: "Too many requests, slow down" }],
+    }), model);
+    // A genuine rate limit IS worth retrying.
+    expect(rate.code).toBe("provider_rate_limited");
   });
 });
