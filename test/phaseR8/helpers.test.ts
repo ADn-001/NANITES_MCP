@@ -20,14 +20,17 @@ import { resolveTarget } from "../../src/router/outbound/resolve.js";
 import { decodeOpenAiRequest } from "../../src/router/inbound/openai.js";
 import { decodeAnthropicRequest } from "../../src/router/inbound/anthropic.js";
 import { ProviderKeyStore } from "../../src/storage/providerKeyStore.js";
-import { ROUTER_PROFILE } from "../../src/router/constants.js";
-import { scratchHome, cleanup } from "../phase3/helpers.js";
+import { scratchHome, cleanup, TEST_PROFILE, writeActiveProfile } from "../phase3/helpers.js";
 
 const homes: string[] = [];
 const servers: StartedRouter[] = [];
 
 async function harness(enableHelpers = false) {
   const h = scratchHome();
+  // The router resolves the ACTIVE profile, so a store call inside this test
+  // needs one to exist. Omitting it produced "cannot be bound to SQLite
+  // parameter 1" from an unrelated-looking failure.
+  writeActiveProfile(h);
   homes.push(h);
   const handle = await startRouter({ home: h, port: 0, bind: "127.0.0.1", env: {} });
   servers.push(handle);
@@ -123,7 +126,7 @@ describe("a helper id never routes to a paid provider", () => {
     //   helper:needle3:extract -> {provider:"cloudflare", ...}
     // A free local request silently billed to a cloud account, no error raised.
     const h = await harness(false);
-    new ProviderKeyStore(h.deps.db).addKey(ROUTER_PROFILE, "cloudflare", "sk-x", { accountId: "acct1" });
+    new ProviderKeyStore(h.deps.db).addKey(TEST_PROFILE, "cloudflare", "sk-x", { accountId: "acct1" });
 
     for (const entry of HELPER_ALIASES) {
       for (const id of [entry.alias, entry.real_id]) {

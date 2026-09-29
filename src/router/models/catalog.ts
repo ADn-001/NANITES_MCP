@@ -16,7 +16,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { NanitesError } from "../../helpers/errors.js";
 import { ProviderModelStore } from "../../storage/providerModelStore.js";
 import { nowIso } from "../../storage/db.js";
-import { ROUTER_PROFILE } from "../constants.js";
+import { routerProfile } from "../constants.js";
 import type { Modality } from "../ir/types.js";
 
 export interface AdvertisedModel {
@@ -95,7 +95,7 @@ export function setAdvertised(db: DatabaseSync, args: {
     });
   }
 
-  const known = new ProviderModelStore(db).getModel(ROUTER_PROFILE, args.provider as never, args.realId);
+  const known = new ProviderModelStore(db).getModel(routerProfile(), args.provider as never, args.realId);
   if (!known) {
     throw new NanitesError({
       code: "alias_candidate_unknown",

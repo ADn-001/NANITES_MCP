@@ -12,7 +12,7 @@ import { ProviderKeyStore } from "../../storage/providerKeyStore.js";
 import { ProviderModelStore } from "../../storage/providerModelStore.js";
 import { nowIso } from "../../storage/db.js";
 import type { ProviderKind } from "../../storage/profileDefaults.js";
-import { ROUTER_PROFILE } from "../constants.js";
+import { routerProfile } from "../constants.js";
 import { selectKey, advanceCursor, type KeyCandidate, type KeyStrategy, type SelectionPolicy } from "./selector.js";
 
 export interface KeyMetrics {
@@ -211,7 +211,7 @@ export class RouterKeyStore {
     endpoint?: string | null;
   }): { key: { key_id: string; api_key: string; account_id: string | null; gateway_url: string | null; nickname: string | null }; cursor: number } {
     const keyStore = new ProviderKeyStore(this.db);
-    let available = keyStore.availableKeys(ROUTER_PROFILE, args.provider);
+    let available = keyStore.availableKeys(routerProfile(), args.provider);
 
     // Endpoint scoping narrows the pool, and an endpoint with no key is a
     // distinct error rather than "fall back to another gateway" — the other
@@ -255,7 +255,7 @@ export class RouterKeyStore {
       };
     });
 
-    const state = keyStore.getKeyState(ROUTER_PROFILE, args.provider);
+    const state = keyStore.getKeyState(routerProfile(), args.provider);
     const policy: SelectionPolicy = {
       strategy: args.strategy,
       budget_threshold: args.budgetThreshold,

@@ -16,9 +16,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { startRouter, type StartedRouter } from "../../src/router/deps.js";
 import { ProviderKeyStore } from "../../src/storage/providerKeyStore.js";
 import { ProviderModelStore } from "../../src/storage/providerModelStore.js";
-import { ROUTER_PROFILE } from "../../src/router/constants.js";
 import { RouterKeyStore } from "../../src/router/keys/store.js";
-import { scratchHome, cleanup } from "../phase3/helpers.js";
+import { scratchHome, cleanup, TEST_PROFILE, writeActiveProfile } from "../phase3/helpers.js";
 
 const homes: string[] = [];
 const servers: StartedRouter[] = [];
@@ -84,6 +83,7 @@ async function harness(opts: {
   strategy?: string;
 }): Promise<H> {
   const home = scratchHome();
+  writeActiveProfile(home);
   homes.push(home);
   const handle = await startRouter({ home, port: 0, bind: "127.0.0.1", env: {} });
   servers.push(handle);
@@ -91,14 +91,14 @@ async function harness(opts: {
 
   const keyStore = new ProviderKeyStore(handle.deps.db);
   for (const k of opts.keys) {
-    keyStore.addKey(ROUTER_PROFILE, (k.provider ?? "openrouter") as never, k.key, {
+    keyStore.addKey(TEST_PROFILE, (k.provider ?? "openrouter") as never, k.key, {
       gatewayUrl: k.gateway,
       nickname: k.nickname ?? null,
     });
   }
   const modelStore = new ProviderModelStore(handle.deps.db);
   for (const m of opts.models ?? [{ provider: "openrouter", model_id: "m1" }]) {
-    modelStore.registerModel(ROUTER_PROFILE, m.provider as never, m.model_id);
+    modelStore.registerModel(TEST_PROFILE, m.provider as never, m.model_id);
   }
   if (opts.strategy) {
     handle.deps.db.prepare("UPDATE router_config SET default_strategy = ? WHERE id = 1").run(opts.strategy);
@@ -233,7 +233,7 @@ describe("R3 — key failover", () => {
     });
     const res = await h.post(req("retire-model"));
     expect(res.status).toBeGreaterThanOrEqual(400);
-    const row = h.keys.listKeys(ROUTER_PROFILE, "openrouter").find((k) => k.api_key === "sk-only");
+    const row = h.keys.listKeys(TEST_PROFILE, "openrouter").find((k) => k.api_key === "sk-only");
     expect(row?.is_exhausted).toBe(true);
   });
 
@@ -270,7 +270,7 @@ describe("R3 — metrics and sticky", () => {
     const h = await harness({ keys: [{ key: "sk-a" }], behaviour: [] });
     await h.post(req());
     await h.post(req());
-    const m = h.routerKeys.getMetrics("openrouter", h.keys.listKeys(ROUTER_PROFILE, "openrouter")[0]!.key_id);
+    const m = h.routerKeys.getMetrics("openrouter", h.keys.listKeys(TEST_PROFILE, "openrouter")[0]!.key_id);
     expect(m?.request_count).toBe(2);
     expect(m?.input_tokens).toBe(8);
     expect(m?.output_tokens).toBe(4);
@@ -281,7 +281,7 @@ describe("R3 — metrics and sticky", () => {
   it("leaves spend NULL when pricing is unknown, never 0", async () => {
     const h = await harness({ keys: [{ key: "sk-a" }], behaviour: [] });
     await h.post(req());
-    const m = h.routerKeys.getMetrics("openrouter", h.keys.listKeys(ROUTER_PROFILE, "openrouter")[0]!.key_id);
+    const m = h.routerKeys.getMetrics("openrouter", h.keys.listKeys(TEST_PROFILE, "openrouter")[0]!.key_id);
     // 0 would read as "this key is free", which is a different claim from
     // "we do not know what this costs".
     expect(m?.spent_usd).toBeNull();
@@ -290,7 +290,7 @@ describe("R3 — metrics and sticky", () => {
   it("records a failure and clears the sticky pointer on error", async () => {
     const h = await harness({ keys: [{ key: "sk-a" }], models: [{ provider: "openrouter", model_id: "fail-model" }], behaviour: [{ key: "sk-a", status: 401 }] });
     await h.post(req("fail-model"));
-    const keyId = h.keys.listKeys(ROUTER_PROFILE, "openrouter")[0]!.key_id;
+    const keyId = h.keys.listKeys(TEST_PROFILE, "openrouter")[0]!.key_id;
     expect(h.routerKeys.getMetrics("openrouter", keyId)?.error_count).toBe(1);
     expect(h.routerKeys.getSticky("openrouter:fail-model")).toBeNull();
   });
@@ -312,7 +312,7 @@ describe("R3 — metrics and sticky", () => {
     const sticky = h.routerKeys.getSticky(`openrouter:${model}`);
     expect(sticky?.key_id).toBeTruthy();
     const usedApiKey = h.keys
-      .listKeys(ROUTER_PROFILE, "openrouter")
+      .listKeys(TEST_PROFILE, "openrouter")
       .find((k) => k.key_id === sticky!.key_id)!.api_key;
     expect(usedApiKey).toBe("sk-solo");
     // The pointer survives to be REUSED, not just recorded.
@@ -330,7 +330,7 @@ describe("R3 — metrics and sticky", () => {
 
   it("releases a sticky pointer whose key is no longer available", async () => {
     const h = await harness({ keys: [{ key: "sk-a" }], behaviour: [] });
-    const keyId = h.keys.listKeys(ROUTER_PROFILE, "openrouter")[0]!.key_id;
+    const keyId = h.keys.listKeys(TEST_PROFILE, "openrouter")[0]!.key_id;
     h.routerKeys.setSticky("openrouter:m1", "openrouter", keyId, 5);
     h.routerKeys.releaseIfUnhealthy("openrouter:m1", new Set(), new Date());
     expect(h.routerKeys.getSticky("openrouter:fail-model")).toBeNull();
@@ -343,7 +343,7 @@ describe("R3 — metrics and sticky", () => {
     // a created_at, so the tiebreak is a random UUID comparison and position 0
     // is sk-a only SOMETIMES. Indexing by position made this a coin-flip that
     // failed roughly one full run in three.
-    const all = h.keys.listKeys(ROUTER_PROFILE, "openrouter");
+    const all = h.keys.listKeys(TEST_PROFILE, "openrouter");
     const keyA = all.find((k) => k.api_key === "sk-a")!;
     h.routerKeys.setUsageThreshold("openrouter", keyA.key_id, 1);
     h.routerKeys.recordSuccess({ provider: "openrouter", keyId: keyA.key_id, inputTokens: 1, outputTokens: 1, spentUsd: null, latencyMs: 5 });
@@ -373,7 +373,7 @@ describe("R3 — NVIDIA NIM", () => {
   it("accepts an account_id without failing validation", async () => {
     // NIM has no account concept, but a config carrying one must not break.
     const h = await harness({ keys: [{ key: "nv-key", provider: "nvidia" }], models: [{ provider: "nvidia", model_id: "m" }], behaviour: [] });
-    h.keys.addKey(ROUTER_PROFILE, "nvidia", "nv-with-acct", { accountId: "acct-123" });
+    h.keys.addKey(TEST_PROFILE, "nvidia", "nv-with-acct", { accountId: "acct-123" });
     const res = await h.post({ model: "nvidia:m", messages: [{ role: "user", content: "hi" }] });
     expect(res.status).toBe(200);
   });

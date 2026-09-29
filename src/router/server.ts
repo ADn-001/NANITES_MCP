@@ -51,7 +51,8 @@ function estimateInputTokens(request: IRRequest): number {
   return total;
 }
 import { dispatchWithFailover } from "./outbound/dispatch.js";
-import { ROUTER_PROFILE } from "./constants.js";
+import { routerProfile } from "./constants.js";
+import { providerKeyCounts } from "./providers/inventory.js";
 
 /** Distinct from the dashboard's 4700 so both can run simultaneously. */
 export const DEFAULT_ROUTER_PORT = 4800;
@@ -158,18 +159,6 @@ function countRows(db: DatabaseSync, sql: string): number {
   } catch {
     // A table that does not exist yet is 0 rows, not a startup failure.
     return 0;
-  }
-}
-
-function providerKeyCounts(db: DatabaseSync): Array<{ provider: string; keys: number }> {
-  try {
-    const rows = db.prepare(
-      `SELECT provider, COUNT(*) AS n FROM provider_api_keys
-        WHERE profile_name = ? GROUP BY provider ORDER BY provider`,
-    ).all(ROUTER_PROFILE) as Array<{ provider: string; n: number }>;
-    return rows.map((r) => ({ provider: r.provider, keys: Number(r.n) }));
-  } catch {
-    return [];
   }
 }
 
@@ -939,7 +928,7 @@ async function handle(
   if (req.method === "GET" && (pathname === "/v1/keys" || pathname === "/v1/keys/")) {
     // Aggregate health per provider key. No secrets, and no per-key metrics
     // yet — those land in R3.
-    sendJson(res, 200, { object: "list", data: providerKeyCounts(opts.db) });
+    sendJson(res, 200, { object: "list", data: providerKeyCounts(opts.db, { enabledOnly: false }) });
     return;
   }
 

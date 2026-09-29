@@ -16,13 +16,11 @@
  *    empty catalog. Here a failure is returned, not swallowed.
  */
 import type { DatabaseSync } from "node:sqlite";
-import { createProviderClient, GenericClient } from "../../providers/client.js";
-import { ProviderKeyStore } from "../../storage/providerKeyStore.js";
-import { ProviderModelStore } from "../../storage/providerModelStore.js";
 import { NanitesError } from "../../helpers/errors.js";
 import type { ProviderKind } from "../../storage/profileDefaults.js";
-import { ROUTER_PROFILE } from "../constants.js";
+import { routerProfile } from "../constants.js";
 import { applyCfCapabilities } from "../providers/cloudflare/capabilities.js";
+import { discoverModels } from "../providers/discover.js";
 
 export interface DiscoveryResult {
   provider: string;
@@ -40,81 +38,30 @@ export interface DiscoveryFailure {
 export type DiscoveryOutcome = DiscoveryResult | DiscoveryFailure;
 
 /**
- * Discover and upsert one provider's catalog. Returns the outcome rather than
- * throwing, so a caller refreshing several providers sees which one failed.
+ * Discover and upsert one provider's catalog for the ROUTER.
+ *
+ * A thin wrapper over the shared `discoverModels`, adding only what is
+ * router-specific: the profile it resolves against, and the Cloudflare
+ * capability pass that fills the audio/image columns R5a reads.
+ *
+ * It used to carry its own copy of the key-selection and base-URL logic, which
+ * had already drifted from the MCP tool's — see src/router/providers/discover.ts.
  */
 export async function discoverAndRefresh(db: DatabaseSync, provider: ProviderKind): Promise<DiscoveryOutcome> {
-  const keyStore = new ProviderKeyStore(db);
-  const keys = keyStore.availableKeys(ROUTER_PROFILE, provider);
-
-  if (keys.length === 0) {
-    return {
-      provider,
-      ok: false,
-      code: "all_keys_exhausted",
-      message: `No enabled, un-exhausted key on "${provider}".`,
-    };
-  }
-
-  // One key is enough to list a catalog. Which key is irrelevant here — this
-  // is a read, and a rate limit on one key should not make a provider look
-  // unconfigured. Key SELECTION is R3's job, for inference calls.
-  const key = keys[0]!;
-
-  try {
-    let models;
-    if (provider === "cloudflare") {
-      if (!key.account_id) {
-        return {
-          provider,
-          ok: false,
-          code: "invalid_arguments",
-          message: "A Cloudflare key requires an account_id.",
-        };
-      }
-      models = (await createProviderClient(provider).listModels(key.api_key, key.account_id)).models;
-    } else if (provider === "generic" || provider === "omniroute") {
-      const base = key.gateway_url
-        ?? (provider === "omniroute" ? "http://localhost:20128/v1" : "http://localhost:8080/v1");
-      models = (await new GenericClient(base).listModels(key.api_key)).models;
-    } else {
-      models = (await createProviderClient(provider).listModels(key.api_key)).models;
-    }
-
-    // The full set, untruncated. `upsertModels` is a batch upsert with
-    // COALESCE on pricing, so a priceless discovery cannot erase a
-    // manifest-seeded rate.
-    const store = new ProviderModelStore(db);
-    store.upsertModels(ROUTER_PROFILE, provider, models);
-
-    // For Cloudflare, the published catalog carries no usable capability data
-    // for the non-text models, so the REGISTRY supplies it. This is what fills
-    // the audio/image capability columns that R5a needs and that nothing else
-    // populates.
+  const outcome = await discoverModels(db, provider, {
+    profile: routerProfile(),
+    // The published Cloudflare catalog carries no usable capability data for
+    // the non-text models, so the REGISTRY supplies it. This is what fills the
+    // audio/image capability columns R5a needs and nothing else populates.
     //
-    // Written as a separate pass rather than folded into upsertModels, because
-    // a model Cloudflare no longer offers must NOT keep its flags: the
-    // registry is a seed, discovery decides what exists.
-    if (provider === "cloudflare") {
-      applyCfCapabilities(db);
-    }
-
-    return { provider, discovered: models.length, ok: true };
-  } catch (err) {
-    return {
-      provider,
-      ok: false,
-      code: (err as { code?: string }).code ?? "unexpected_error",
-      message: err instanceof Error ? err.message : String(err),
-    };
+    // A separate pass, not part of upsertModels: a model Cloudflare no longer
+    // offers must NOT keep its flags. The registry seeds; discovery decides.
+    afterCloudflareUpsert: provider === "cloudflare" ? applyCfCapabilities : undefined,
+  });
+  if (outcome.ok) {
+    return { provider: outcome.provider, discovered: outcome.model_count, ok: true };
   }
-}
-
-/** Refresh every configured provider, reporting each outcome. */
-export async function discoverAll(db: DatabaseSync, providers: ProviderKind[]): Promise<DiscoveryOutcome[]> {
-  const out: DiscoveryOutcome[] = [];
-  for (const p of providers) out.push(await discoverAndRefresh(db, p));
-  return out;
+  return { provider: outcome.provider, ok: false, code: outcome.code, message: outcome.message };
 }
 
 /** Throw a structured error when discovery failed, for single-provider callers. */

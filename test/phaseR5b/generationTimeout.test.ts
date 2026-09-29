@@ -23,7 +23,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import { startRouter, type StartedRouter } from "../../src/router/deps.js";
 import { ProviderKeyStore } from "../../src/storage/providerKeyStore.js";
 import { ProviderModelStore } from "../../src/storage/providerModelStore.js";
-import { ROUTER_PROFILE } from "../../src/router/constants.js";
 import {
   resolveTimeout,
   DEFAULT_GENERATION_TIMEOUT_MS,
@@ -32,7 +31,7 @@ import {
 import { decodeOpenAiRequest } from "../../src/router/inbound/openai.js";
 import { decodeAnthropicRequest } from "../../src/router/inbound/anthropic.js";
 import type { IRRequest } from "../../src/router/ir/types.js";
-import { scratchHome, cleanup } from "../phase3/helpers.js";
+import { scratchHome, cleanup, TEST_PROFILE, writeActiveProfile } from "../phase3/helpers.js";
 
 const homes: string[] = [];
 const servers: StartedRouter[] = [];
@@ -64,12 +63,13 @@ function stubCloudflare(handler: (init?: RequestInit) => Response | Promise<Resp
 
 async function harness() {
   const h = scratchHome();
+  writeActiveProfile(h);
   homes.push(h);
   const handle = await startRouter({ home: h, port: 0, bind: "127.0.0.1", env: {} });
   servers.push(handle);
-  new ProviderKeyStore(handle.deps.db).addKey(ROUTER_PROFILE, "cloudflare", "cf-token", { accountId: "acct" });
+  new ProviderKeyStore(handle.deps.db).addKey(TEST_PROFILE, "cloudflare", "cf-token", { accountId: "acct" });
   new ProviderModelStore(handle.deps.db)
-    .registerModel(ROUTER_PROFILE, "cloudflare", "@cf/black-forest-labs/flux-1-schnell");
+    .registerModel(TEST_PROFILE, "cloudflare", "@cf/black-forest-labs/flux-1-schnell");
   const key = handle.deps.generatedKey!;
   return {
     handle, key,

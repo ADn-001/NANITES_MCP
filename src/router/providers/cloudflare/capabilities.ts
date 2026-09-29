@@ -12,12 +12,12 @@
  */
 import type { DatabaseSync } from "node:sqlite";
 import { ProviderModelStore } from "../../../storage/providerModelStore.js";
-import { ROUTER_PROFILE } from "../../constants.js";
+import { routerProfile } from "../../constants.js";
 import { CF_MODELS, cfInputModalities, cfOutputModalities } from "./catalog.js";
 
 export function applyCfCapabilities(db: DatabaseSync): number {
   const store = new ProviderModelStore(db);
-  const present = new Set(store.listModels(ROUTER_PROFILE, "cloudflare").map((m) => m.model_id));
+  const present = new Set(store.listModels(routerProfile(), "cloudflare").map((m) => m.model_id));
   let written = 0;
 
   for (const def of CF_MODELS) {
@@ -27,7 +27,7 @@ export function applyCfCapabilities(db: DatabaseSync): number {
     // discovers by using it, which is exactly what the unknown-means-unknown
     // rule exists to prevent.
     if (def.unverified) continue;
-    const existing = store.getModel(ROUTER_PROFILE, "cloudflare", def.id);
+    const existing = store.getModel(routerProfile(), "cloudflare", def.id);
     if (!existing) continue;
 
     // The OUTPUT modalities are what a caller can ask this model to produce.
@@ -35,7 +35,7 @@ export function applyCfCapabilities(db: DatabaseSync): number {
     const outputs = cfOutputModalities(def);
     if (outputs.length === 0) continue;
 
-    store.updateModalities(ROUTER_PROFILE, "cloudflare", def.id, outputs, {
+    store.updateModalities(routerProfile(), "cloudflare", def.id, outputs, {
       vision: cfInputModalities(def).includes("image"),
       audio: cfInputModalities(def).includes("audio"),
       video: false,

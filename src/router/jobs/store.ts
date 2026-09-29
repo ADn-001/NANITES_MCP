@@ -19,7 +19,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { nowIso } from "../../storage/db.js";
-import { ROUTER_PROFILE } from "../constants.js";
+import { routerProfile } from "../constants.js";
 import type { Modality } from "../ir/types.js";
 
 export type JobStatus = "queued" | "running" | "finalizing" | "done" | "failed" | "cancelled";

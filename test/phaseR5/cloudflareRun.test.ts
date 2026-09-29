@@ -20,9 +20,8 @@ import { buildRunBody, decodeRunResponse, fromBase64, runUrl, sniffImageMime, ty
 import { applyCfCapabilities } from "../../src/router/providers/cloudflare/capabilities.js";
 import { openNanitesDb } from "../../src/storage/db.js";
 import { ProviderModelStore } from "../../src/storage/providerModelStore.js";
-import { ROUTER_PROFILE } from "../../src/router/constants.js";
 import type { IRRequest } from "../../src/router/ir/types.js";
-import { scratchHome, cleanup } from "../phase3/helpers.js";
+import { scratchHome, cleanup, TEST_PROFILE, writeActiveProfile } from "../phase3/helpers.js";
 
 const homes: string[] = [];
 const opened: Array<{ close(): void }> = [];
@@ -316,40 +315,42 @@ describe("response decoding", () => {
 describe("capability population", () => {
   it("fills modalities ONLY for models discovery actually found", () => {
     const home = scratchHome();
+  writeActiveProfile(home);
     homes.push(home);
     const { db, close } = openNanitesDb(home);
     opened.push({ close });
 
     const store = new ProviderModelStore(db);
     // Discovery "found" these two.
-    store.registerModel(ROUTER_PROFILE, "cloudflare", "@cf/black-forest-labs/flux-1-schnell");
-    store.registerModel(ROUTER_PROFILE, "cloudflare", "@cf/llava-hf/llava-1.5-7b-hf");
+    store.registerModel(TEST_PROFILE, "cloudflare", "@cf/black-forest-labs/flux-1-schnell");
+    store.registerModel(TEST_PROFILE, "cloudflare", "@cf/llava-hf/llava-1.5-7b-hf");
 
     expect(applyCfCapabilities(db)).toBe(2);
 
-    const flux = store.getModel(ROUTER_PROFILE, "cloudflare", "@cf/black-forest-labs/flux-1-schnell")!;
+    const flux = store.getModel(TEST_PROFILE, "cloudflare", "@cf/black-forest-labs/flux-1-schnell")!;
     // An image model that emits nothing the router understands would be
     // invisible to the planner, so its output modality must be recorded.
     expect(flux.supported_modalities).toEqual(["image"]);
 
-    const llava = store.getModel(ROUTER_PROFILE, "cloudflare", "@cf/llava-hf/llava-1.5-7b-hf")!;
+    const llava = store.getModel(TEST_PROFILE, "cloudflare", "@cf/llava-hf/llava-1.5-7b-hf")!;
     expect(llava.supported_modalities).toEqual(["text"]);
     // The vision INPUT capability: nothing else populates this column.
     expect(llava.capabilities.vision).toBe(true);
 
     // A registry model that discovery did NOT find gets no row at all.
-    expect(store.getModel(ROUTER_PROFILE, "cloudflare", "@cf/moonshot/kimi-k2.6")).toBeNull();
+    expect(store.getModel(TEST_PROFILE, "cloudflare", "@cf/moonshot/kimi-k2.6")).toBeNull();
   });
 
   it("marks a text-generation model as function-calling capable", () => {
     const home = scratchHome();
+  writeActiveProfile(home);
     homes.push(home);
     const { db, close } = openNanitesDb(home);
     opened.push({ close });
     const store = new ProviderModelStore(db);
-    store.registerModel(ROUTER_PROFILE, "cloudflare", "@cf/meta/llama-4-scout-17b-16e-instruct");
+    store.registerModel(TEST_PROFILE, "cloudflare", "@cf/meta/llama-4-scout-17b-16e-instruct");
     applyCfCapabilities(db);
-    const m = store.getModel(ROUTER_PROFILE, "cloudflare", "@cf/meta/llama-4-scout-17b-16e-instruct")!;
+    const m = store.getModel(TEST_PROFILE, "cloudflare", "@cf/meta/llama-4-scout-17b-16e-instruct")!;
     expect(m.capabilities.function_calling).toBe(true);
     // Llama 4 Scout is natively multimodal, so it both accepts images and emits text.
     expect(m.capabilities.vision).toBe(true);

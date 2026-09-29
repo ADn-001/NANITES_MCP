@@ -15,8 +15,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { startRouter, type StartedRouter } from "../../src/router/deps.js";
 import { ProviderKeyStore } from "../../src/storage/providerKeyStore.js";
 import { ProviderModelStore } from "../../src/storage/providerModelStore.js";
-import { ROUTER_PROFILE } from "../../src/router/constants.js";
-import { scratchHome, cleanup } from "../phase3/helpers.js";
+import { scratchHome, cleanup, TEST_PROFILE, writeActiveProfile } from "../phase3/helpers.js";
 
 const homes: string[] = [];
 const servers: StartedRouter[] = [];
@@ -117,12 +116,13 @@ function openaiEvents(res: Response): Promise<StreamEvent[]> {
 
 async function harness(chunks: UpstreamChunk[], opts: { fail?: boolean; usage?: { prompt_tokens: number; completion_tokens: number } } = {}) {
   const h = scratchHome();
+  writeActiveProfile(h);
   homes.push(h);
   const handle = await startRouter({ home: h, port: 0, bind: "127.0.0.1", env: {} });
   servers.push(handle);
   const key = handle.deps.generatedKey!;
-  new ProviderKeyStore(handle.deps.db).addKey(ROUTER_PROFILE, "openrouter", "sk-test");
-  new ProviderModelStore(handle.deps.db).registerModel(ROUTER_PROFILE, "openrouter", "qwen/qwen3-8b");
+  new ProviderKeyStore(handle.deps.db).addKey(TEST_PROFILE, "openrouter", "sk-test");
+  new ProviderModelStore(handle.deps.db).registerModel(TEST_PROFILE, "openrouter", "qwen/qwen3-8b");
   const stub = stubSse(chunks, opts);
 
   return {

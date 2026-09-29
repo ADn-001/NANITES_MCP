@@ -7,12 +7,16 @@
  * file is mostly about.
  */
 import { afterEach, describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
 import { HelperWorker, workerPath } from "../../src/router/helpers/workerClient.js";
 import { multiToolSource, schemaSourceFor, pyDoc, pyLiteral } from "../../src/router/helpers/schemaSource.js";
 import { HELPER_FEATURES, HELPER_FEATURE_NAMES, featureColumn, isHelperFeature } from "../../src/router/helpers/features.js";
 import { startRouter, type StartedRouter } from "../../src/router/deps.js";
+import { setRouterHome, clearProfileBinding } from "../../src/router/constants.js";
 import { updateConfig } from "../../src/router/auth.js";
-import { scratchHome, cleanup } from "../phase3/helpers.js";
+import { scratchHome, cleanup, TEST_PROFILE, writeActiveProfile } from "../phase3/helpers.js";
+import { ProviderKeyStore } from "../../src/storage/providerKeyStore.js";
 
 const homes: string[] = [];
 const servers: StartedRouter[] = [];
@@ -26,6 +30,8 @@ afterEach(async () => {
 
 async function harness() {
   const h = scratchHome();
+  // The router resolves the ACTIVE profile, so it must exist before boot.
+  writeActiveProfile(h);
   homes.push(h);
   const handle = await startRouter({ home: h, port: 0, bind: "127.0.0.1", env: {} });
   servers.push(handle);
@@ -257,5 +263,77 @@ describe("the worker protocol", () => {
     // The NEXT request starts a fresh one rather than failing forever.
     expect((await w.send({ op: "ping" })).ok).toBe(true);
     expect(w.running()).toBe(true);
+  });
+});
+
+/**
+ * The router reads the ACTIVE profile's provider rows.
+ *
+ * This is the invariant the whole `__router__` removal exists to establish.
+ * Before it, the router read a reserved namespace that nothing in the product
+ * could write to, so a key added through `nanites_addProviderKey` — the only
+ * insert into the table in the entire tree — was invisible to the gateway.
+ * Verified against the real database before the change: the router resolved an
+ * empty key set on a home where the Providers tab had keys.
+ */
+describe("the router reads the Providers tab's keys", () => {
+  it("resolves a key added through the shared store", async () => {
+    const h = await harness();
+    // Written exactly as the Providers tab writes it: the active profile.
+    new ProviderKeyStore(h.deps.db).addKey(TEST_PROFILE, "cloudflare", "sk-from-providers-tab", {
+      accountId: "acct1",
+    });
+
+    const { RouterKeyStore } = await import("../../src/router/keys/store.js");
+    const picked = new RouterKeyStore(h.deps.db).pickKey({
+      provider: "cloudflare",
+      modelId: "cloudflare:some-model",
+      strategy: "round_robin" as never,
+      budgetThreshold: 0.9,
+      stickyTtlTurns: 5,
+      fallback: "round_robin" as never,
+      random: Math.random,
+    });
+    expect(picked.key.api_key).toBe("sk-from-providers-tab");
+  });
+
+  it("does NOT read a row from the legacy namespace", async () => {
+    // The bug in its purest form. A row under the old reserved name must be
+    // invisible, because reading it is what made the two surfaces look like
+    // they had separate storage when they did not.
+    const h = await harness();
+    new ProviderKeyStore(h.deps.db).addKey("__router__", "cloudflare", "sk-legacy", {
+      accountId: "acct-legacy",
+    });
+
+    const { RouterKeyStore } = await import("../../src/router/keys/store.js");
+    let code: string | null = null;
+    try {
+      new RouterKeyStore(h.deps.db).pickKey({
+        provider: "cloudflare",
+        modelId: "cloudflare:some-model",
+        strategy: "round_robin" as never,
+        budgetThreshold: 0.9,
+        stickyTtlTurns: 5,
+        fallback: "round_robin" as never,
+        random: Math.random,
+      });
+    } catch (e) { code = (e as { code?: string }).code ?? null; }
+    expect(code).toBe("all_keys_exhausted");
+  });
+
+  it("refuses to guess a profile when none is active", async () => {
+    // A gateway with no keys must say so at the point of use. Returning a
+    // default name would send a request to a provider nobody configured.
+    const h = scratchHome();
+    homes.push(h);
+    fs.writeFileSync(path.join(h, "active_profile.json"), "{}", "utf8");
+    setRouterHome(h);
+    clearProfileBinding();
+
+    const { routerProfile } = await import("../../src/router/constants.js");
+    let code: string | null = null;
+    try { routerProfile(); } catch (e) { code = (e as { code?: string }).code ?? null; }
+    expect(code).toBe("no_active_profile");
   });
 });

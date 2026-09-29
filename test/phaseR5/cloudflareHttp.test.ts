@@ -10,9 +10,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { startRouter, type StartedRouter } from "../../src/router/deps.js";
 import { ProviderKeyStore } from "../../src/storage/providerKeyStore.js";
 import { ProviderModelStore } from "../../src/storage/providerModelStore.js";
-import { ROUTER_PROFILE } from "../../src/router/constants.js";
 import { needsRunPath } from "../../src/router/outbound/cloudflareRun.js";
-import { scratchHome, cleanup } from "../phase3/helpers.js";
+import { scratchHome, cleanup, TEST_PROFILE, writeActiveProfile } from "../phase3/helpers.js";
 
 const homes: string[] = [];
 const servers: StartedRouter[] = [];
@@ -43,15 +42,16 @@ function stubCloudflare(seen: Seen[], reply: (url: string) => Response): void {
 
 async function harness(modelIds: string[]) {
   const h = scratchHome();
+  writeActiveProfile(h);
   homes.push(h);
   const handle = await startRouter({ home: h, port: 0, bind: "127.0.0.1", env: {} });
   servers.push(handle);
 
-  new ProviderKeyStore(handle.deps.db).addKey(ROUTER_PROFILE, "cloudflare", "cf-token", {
+  new ProviderKeyStore(handle.deps.db).addKey(TEST_PROFILE, "cloudflare", "cf-token", {
     accountId: "acct-test",
   });
   const models = new ProviderModelStore(handle.deps.db);
-  for (const id of modelIds) models.registerModel(ROUTER_PROFILE, "cloudflare", id);
+  for (const id of modelIds) models.registerModel(TEST_PROFILE, "cloudflare", id);
 
   const seen: Seen[] = [];
   const post = (body: Record<string, unknown>) =>

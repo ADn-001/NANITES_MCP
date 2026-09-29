@@ -11,6 +11,13 @@
  * It shares NANITES_HOME and the SQLite database with the MCP server, which is
  * the whole point of the same-repo/same-database decision (D1): the provider
  * keys are already configured there and are not re-entered here.
+ *
+ * That sentence used to be aspirational. The router read a reserved
+ * `__router__` profile that nothing in the product wrote to, so the keys
+ * configured in the Providers tab were invisible to the gateway. It now
+ * resolves the ACTIVE profile -- the same rows the Providers tab writes -- and
+ * rebinds when that profile changes, so a key added in the UI is usable on the
+ * gateway's next request with no restart. See src/router/constants.ts.
  */
 import { startRouter, type StartedRouter } from "./deps.js";
 import { DEFAULT_ROUTER_BIND, DEFAULT_ROUTER_PORT, sweepIdleRateLimitBuckets } from "./server.js";

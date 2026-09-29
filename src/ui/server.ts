@@ -16,8 +16,9 @@ import path from "node:path";
 import type { AddressInfo } from "node:net";
 import type { ToolDeps } from "../tools/deps.js";
 import { readHelperState, applyHelperToggle } from "../tools/routerHelpers.js";
+import { providerKeyCounts, providerModelCounts, routerTableCount } from "../router/providers/inventory.js";
 import { readConfig } from "../router/auth.js";
-import { ROUTER_PROFILE } from "../router/constants.js";
+import { routerProfile } from "../router/constants.js";
 import { clientForProfile } from "../tools/deps.js";
 import { runHealthCheck, defaultDiskDir as healthDiskDir, type RecoveryStep } from "../health/checker.js";
 import { isAllowedHostHeader, isAllowedOrigin, newLanToken, tokensMatch, assertOutboundUrl, LAN_TOKEN_HEADER } from "./guards.js";
@@ -1702,34 +1703,12 @@ const helperConfigSchema = z.object({
  */
 function handleGetRouterStatus(deps: ToolDeps, res: ServerResponse): void {
   const cfg = readConfig(deps.db);
-  const keys = (() => {
-    try {
-      const rows = deps.db.prepare(
-        "SELECT provider, COUNT(*) AS n FROM provider_api_keys WHERE profile_name = ? AND is_enabled = 1 GROUP BY provider ORDER BY provider",
-      ).all(ROUTER_PROFILE) as Array<{ provider: string; n: number }>;
-      return rows.map((r) => ({ provider: r.provider, keys: Number(r.n) }));
-    } catch {
-      return [];
-    }
-  })();
-  const models = (() => {
-    try {
-      const rows = deps.db.prepare(
-        "SELECT provider, COUNT(*) AS n FROM provider_models WHERE profile_name = ? AND is_registered = 1 GROUP BY provider ORDER BY provider",
-      ).all(ROUTER_PROFILE) as Array<{ provider: string; n: number }>;
-      return rows.map((r) => ({ provider: r.provider, models: Number(r.n) }));
-    } catch {
-      return [];
-    }
-  })();
-  const count = (sql: string): number => {
-    try {
-      const row = deps.db.prepare(sql).get() as { n?: number } | undefined;
-      return Number(row?.n ?? 0);
-    } catch {
-      return 0;
-    }
-  };
+  // One implementation, shared with GET /v1/keys. These were two queries that
+  // disagreed: this one filtered is_enabled, that one did not, so the same
+  // database reported a different key count in each tab.
+  const keys = providerKeyCounts(deps.db);
+  const models = providerModelCounts(deps.db);
+  const count = (sql: string): number => routerTableCount(deps.db, sql);
   sendJson(res, 200, {
     // False rather than omitted: the tab must not assume the process is up.
     running: false,

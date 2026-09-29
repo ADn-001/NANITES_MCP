@@ -4,6 +4,8 @@
  * incrementing version instead of editing an applied migration.
  */
 import type { DatabaseSync } from "node:sqlite";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
 export interface Migration {
   version: number;
@@ -500,9 +502,18 @@ export const MIGRATIONS: Migration[] = [
     // These tables are NOT profile-scoped. Router config is global (design
     // decision D3) — a gateway serving remote harnesses has no business
     // inheriting a local machine profile. The tables that the existing
-    // profile-scoped stores own (provider_api_keys, provider_models) are still
-    // keyed by profile_name, and the router writes them under the reserved
-    // ROUTER_PROFILE name. See src/router/constants.ts.
+    // profile-scoped stores own (provider_api_keys, provider_models) are keyed
+    // by profile_name.
+    //
+    // NOTE, corrected later: this comment went on to claim the router "writes
+    // them under the reserved" `__router__` profile, and that turned out to
+    // describe a namespace NOTHING could write to. The keys in the Providers
+    // tab went to the active profile, so the router read an empty set. The
+    // claim was true about the TABLE and false about the ROWS, which is the
+    // worst kind of documentation: it reads like a decision and hides a bug.
+    // Migration 27 copies any such rows onto the active profile, and
+    // src/router/constants.ts now resolves the active profile instead.
+    // See src/router/constants.ts for how the router now resolves its rows.
     version: 25,
     sql: `
       CREATE TABLE IF NOT EXISTS router_config (
@@ -611,9 +622,35 @@ export const MIGRATIONS: Migration[] = [
     // the canonical list; the branch above reads the same names.
     sql: "",
   },
+  {
+    // Move any rows the legacy "__router__" namespace holds onto the ACTIVE
+    // profile.
+    //
+    // This is not a cosmetic rename. The router used to read keys from a
+    // reserved profile that NOTHING could write to, so any rows there came
+    // from a seed script or a hand-run INSERT. Deleting them would silently
+    // strand a configured gateway; copying them is the only outcome that
+    // cannot lose work.
+    //
+    // Runs AFTER 26 so a database that never had the feature columns still
+    // lands in one consistent state. Idempotent: the guard is the absence of
+    // any remaining legacy row.
+    version: 27,
+    sql: "",
+  },
 ];
 
-export function applyMigrations(db: DatabaseSync): void {
+/**
+ * `home` is REQUIRED, not optional.
+ *
+ * Migration 27 copies the legacy `__router__` provider rows onto the active
+ * profile, and the active profile is a FILE beside the database rather than a
+ * column in it. A migration that cannot see which home it is migrating falls
+ * back to the default one and silently copies nothing — the rows stay in the
+ * dead namespace and the gateway still resolves nothing. Passing the home in
+ * is what makes that impossible.
+ */
+export function applyMigrations(db: DatabaseSync, home: string): void {
   const row = db.prepare("PRAGMA user_version").get() as { user_version: number } | undefined;
   const current = Number(row?.user_version ?? 0);
   for (const migration of MIGRATIONS) {
@@ -667,6 +704,8 @@ export function applyMigrations(db: DatabaseSync): void {
             db.exec(`ALTER TABLE router_config ADD COLUMN ${name} ${decl}`);
           }
         }
+      } else if (migration.version === 27) {
+        migrateLegacyRouterRows(db, home);
       } else if (migration.version === 17) {
         // Idempotent: add the nullable provider column to model_registry if missing.
         const cols = db.prepare("PRAGMA table_info(model_registry)").all() as Array<{ name: string }>;
@@ -808,4 +847,59 @@ export function applyMigrations(db: DatabaseSync): void {
       throw err;
     }
   }
+}
+
+/**
+ * Copy `__router__` provider keys and models onto the active profile.
+ *
+ * INSERT OR IGNORE, not UPDATE: the destination may already hold the same
+ * (profile, provider, key_id). Overwriting a row the user is actively using
+ * would be a far worse failure than leaving the legacy copy in place, and the
+ * legacy copy is harmless once nothing reads it.
+ *
+ * Skipped entirely when there is no active profile — a first-run database with
+ * no profile yet is a normal state, and inventing a target name would create
+ * rows nobody can ever address.
+ */
+function migrateLegacyRouterRows(db: DatabaseSync, home: string): void {
+  const active = (() => {
+    try {
+      const raw = readFileSync(path.join(home, "active_profile.json"), "utf8");
+      const name = (JSON.parse(raw) as { name?: unknown }).name;
+      return typeof name === "string" && name.trim() ? name.trim() : null;
+    } catch {
+      return null;
+    }
+  })();
+  if (!active) return;
+  if (active === "__router__") return;
+
+  const legacyCount = db.prepare(
+    "SELECT COUNT(*) AS n FROM provider_api_keys WHERE profile_name = ?",
+  ).get("__router__") as { n: number };
+  const modelCount = db.prepare(
+    "SELECT COUNT(*) AS n FROM provider_models WHERE profile_name = ?",
+  ).get("__router__") as { n: number };
+  // Guard, not just an optimisation: re-running must be a no-op, and the
+  // absence of legacy rows is the proof that it already ran.
+  if (Number(legacyCount.n) === 0 && Number(modelCount.n) === 0) return;
+
+  db.prepare(`
+    INSERT OR IGNORE INTO provider_api_keys
+      (profile_name, provider, key_id, api_key, account_id, gateway_url, nickname,
+       is_enabled, is_exhausted, exhausted_until, consecutive_failures, created_at)
+    SELECT ?, provider, key_id, api_key, account_id, gateway_url, nickname,
+           is_enabled, is_exhausted, exhausted_until, consecutive_failures, created_at
+      FROM provider_api_keys WHERE profile_name = '__router__'
+  `).run(active);
+  db.prepare(`
+    INSERT OR IGNORE INTO provider_models
+      (profile_name, provider, model_id, name, owned_by, context_window, max_output_tokens,
+       pricing_prompt, pricing_completion, capabilities, supported_modalities, is_registered,
+       performance_score, last_refreshed, created_at, updated_at)
+    SELECT ?, provider, model_id, name, owned_by, context_window, max_output_tokens,
+           pricing_prompt, pricing_completion, capabilities, supported_modalities, is_registered,
+           performance_score, last_refreshed, created_at, updated_at
+      FROM provider_models WHERE profile_name = '__router__'
+  `).run(active);
 }

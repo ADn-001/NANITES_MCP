@@ -12,7 +12,7 @@ import { parseModelId, providerOfModelId, isNamespaced } from "../../storage/pro
 import { ProviderModelStore } from "../../storage/providerModelStore.js";
 import { ProviderKeyStore } from "../../storage/providerKeyStore.js";
 import type { ProviderKind } from "../../storage/profileDefaults.js";
-import { ROUTER_PROFILE } from "../constants.js";
+import { routerProfile } from "../constants.js";
 import { getAdvertised } from "../models/catalog.js";
 import { resolveHelperAlias } from "../helpers/registry.js";
 
@@ -106,7 +106,7 @@ export function resolveTarget(db: DatabaseSync, model: string): ResolvedTarget {
 
   // 3. A bare id. Search the catalog; refuse to guess.
   const store = new ProviderModelStore(db);
-  const all = store.listModels(ROUTER_PROFILE);
+  const all = store.listModels(routerProfile());
   const exact = all.filter((m) => m.model_id === id);
 
   if (exact.length === 1) {
@@ -131,7 +131,7 @@ export function resolveTarget(db: DatabaseSync, model: string): ResolvedTarget {
   const keyStore = new ProviderKeyStore(db);
   const configured = [...VALID_PROVIDERS]
     .filter((p) => p !== "local")
-    .filter((p) => keyStore.listKeys(ROUTER_PROFILE, p as ProviderKind).length > 0);
+    .filter((p) => keyStore.listKeys(routerProfile(), p as ProviderKind).length > 0);
 
   if (configured.length === 1) {
     const provider = configured[0] as ProviderKind;
@@ -173,7 +173,7 @@ export function candidateTargets(db: DatabaseSync, model: string): string[] {
   const store = new ProviderModelStore(db);
   const id = model.trim();
   return store
-    .listModels(ROUTER_PROFILE)
+    .listModels(routerProfile())
     .filter((m) => m.model_id === id)
     .map((m) => `${m.provider}:${m.model_id}`);
 }

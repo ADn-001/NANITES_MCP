@@ -27,7 +27,7 @@ import {
   readConfig,
   ensureConfigRow,
 } from "../../src/router/auth.js";
-import { ROUTER_PROFILE } from "../../src/router/constants.js";
+import { LEGACY_ROUTER_PROFILE } from "../../src/router/constants.js";
 import { MAX_BODY_BYTES } from "../../src/router/server.js";
 import { MIGRATIONS } from "../../src/storage/migrations.js";
 import { ProfileManager } from "../../src/storage/profileManager.js";
@@ -172,13 +172,13 @@ describe("R0.2 — storage", () => {
     expect(Number(after.n)).toBe(1);
   });
 
-  it("reserves __router__ so a user profile cannot collide with router state", () => {
+  it("reserves __router__ so a user profile cannot collide with the legacy rows", () => {
     const h = home();
     const pm = new ProfileManager(h);
 
     let code: string | null = null;
     try {
-      pm.createProfile({ name: ROUTER_PROFILE } as never);
+      pm.createProfile({ name: LEGACY_ROUTER_PROFILE } as never);
     } catch (err) {
       code = (err as { code?: string }).code ?? "unknown";
     }

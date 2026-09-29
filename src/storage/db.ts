@@ -10,6 +10,16 @@ import { applyMigrations } from "./migrations.js";
 
 export interface NanitesDb {
   db: DatabaseSync;
+  /**
+   * The RESOLVED home this handle is attached to.
+   *
+   * Not the same as the argument: the argument is optional, and the caller
+   * usually has no idea whether NANITES_HOME or the default was used. The
+   * router needs the real one to resolve the active profile, and a caller
+   * guessing wrong reads a DIFFERENT profile's keys -- which looks exactly
+   * like "no keys configured".
+   */
+  home: string;
   close(): void;
 }
 
@@ -30,7 +40,7 @@ export function openNanitesDb(home?: string): NanitesDb {
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA busy_timeout = 5000");
   db.exec("PRAGMA foreign_keys = ON");
-  applyMigrations(db);
+  applyMigrations(db, layout.home);
   // 0600: this file holds provider API keys in plaintext.
   // Best-effort — meaningless on Windows, meaningful on a POSIX host.
   try {
@@ -38,7 +48,7 @@ export function openNanitesDb(home?: string): NanitesDb {
   } catch {
     // A pre-existing file with foreign ownership: not worth failing startup.
   }
-  return { db, close: () => db.close() };
+  return { db, home: layout.home, close: () => db.close() };
 }
 
 /** Row timestamp helper — ISO 8601 UTC. */

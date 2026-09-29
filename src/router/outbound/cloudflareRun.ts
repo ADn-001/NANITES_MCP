@@ -19,7 +19,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { ProviderKeyStore } from "../../storage/providerKeyStore.js";
 import type { ProviderKind } from "../../storage/profileDefaults.js";
 import { NanitesError } from "../../helpers/errors.js";
-import { ROUTER_PROFILE } from "../constants.js";
+import { routerProfile } from "../constants.js";
 import { findCfModel, type CfModelDef } from "../providers/cloudflare/catalog.js";
 import { buildRunBody, decodeRunResponse, runUrl, type CfArtifact } from "../providers/cloudflare/run.js";
 import type { IRRequest, IRResponse, Modality } from "../ir/types.js";
@@ -264,7 +264,7 @@ function retireKey(db: DatabaseSync, provider: ProviderKind, keyId: string, code
         new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate() + 1, 0, 0, 0, 0,
       ))
     : new Date(Date.now() + 24 * 60 * 60 * 1000);
-  new ProviderKeyStore(db).exhaustKey(ROUTER_PROFILE, provider, keyId, until);
+  new ProviderKeyStore(db).exhaustKey(routerProfile(), provider, keyId, until);
 }
 
 /** The default ceiling. Generous enough for the slowest model measured live. */

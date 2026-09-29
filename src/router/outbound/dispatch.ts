@@ -21,7 +21,7 @@ import type {
   ProviderToolDef,
 } from "../../providers/types.js";
 import { NanitesError } from "../../helpers/errors.js";
-import { ROUTER_PROFILE } from "../constants.js";
+import { routerProfile } from "../constants.js";
 import { readConfig } from "../auth.js";
 import { RouterKeyStore } from "../keys/store.js";
 import type { KeyStrategy } from "../keys/selector.js";
@@ -226,7 +226,7 @@ function retireKey(db: DatabaseSync, provider: ProviderKind, keyId: string, code
         0, 0, 0, 0,
       ))
     : new Date(Date.now() + 24 * 60 * 60 * 1000);
-  keyStore.exhaustKey(ROUTER_PROFILE, provider, keyId, until);
+  keyStore.exhaustKey(routerProfile(), provider, keyId, until);
 }
 
 /**
@@ -266,7 +266,7 @@ function computeCostFor(
 ): number | undefined {
   if (!usage) return undefined;
   const store = new ProviderModelStore(db);
-  const model = store.getModel(ROUTER_PROFILE, target.provider, target.model_id);
+  const model = store.getModel(routerProfile(), target.provider, target.model_id);
   const prompt = model?.pricing_prompt;
   const completion = model?.pricing_completion;
   if (prompt === null || prompt === undefined) return undefined;
@@ -276,7 +276,7 @@ function computeCostFor(
 
 export function selectKey(db: DatabaseSync, target: RoutableTarget, keyId?: string) {
   if (keyId) {
-    const available = new ProviderKeyStore(db).availableKeys(ROUTER_PROFILE, target.provider);
+    const available = new ProviderKeyStore(db).availableKeys(routerProfile(), target.provider);
     const found = available.find((k) => k.key_id === keyId);
     if (found) return found;
     throw new NanitesError({
@@ -301,7 +301,7 @@ export function selectKey(db: DatabaseSync, target: RoutableTarget, keyId?: stri
       endpoint: target.endpoint ?? null,
     });
     // Persist the advanced cursor so round-robin continues across processes.
-    new ProviderKeyStore(db).saveKeyState(ROUTER_PROFILE, target.provider, picked.cursor - 1, {});
+    new ProviderKeyStore(db).saveKeyState(routerProfile(), target.provider, picked.cursor - 1, {});
     return picked.key;
   } catch (err) {
     const code = (err as { code?: string }).code ?? "all_keys_exhausted";
@@ -356,14 +356,14 @@ export async function dispatch(input: DispatchInput): Promise<IRResponse> {
     // do. The key-scoped codes also retire the key via the existing store.
     routerKeys.recordFailure(target.provider, key.key_id);
     routerKeys.clearSticky(target.stored_id);
-    keyStore.recordFailure(ROUTER_PROFILE, target.provider, key.key_id);
+    keyStore.recordFailure(routerProfile(), target.provider, key.key_id);
     throw err;
   }
   const latency = Date.now() - started;
 
   // Success clears the key's consecutive-failure count, records metrics, and
   // makes this the sticky key for the model.
-  keyStore.clearExhaustion(ROUTER_PROFILE, target.provider, key.key_id);
+  keyStore.clearExhaustion(routerProfile(), target.provider, key.key_id);
   routerKeys.recordSuccess({
     provider: target.provider,
     keyId: key.key_id,

@@ -11,6 +11,8 @@ import { ProviderErrorStore } from "../storage/providerErrorStore.js";
 import { ProviderStickyStore } from "../storage/providerStickyStore.js";
 import { requireActiveProfile } from "./deps.js";
 import type { ProviderKind } from "../storage/profileDefaults.js";
+import { clearProfileBinding } from "../router/constants.js";
+import { discoverModels } from "../router/providers/discover.js";
 
 const VALID_PROVIDERS: ProviderKind[] = ["cloudflare", "openrouter", "nvidia", "omniroute", "generic"];
 
@@ -30,6 +32,11 @@ export function addProviderKey(deps: ToolDeps, provider: string, apiKey: string,
   const prov = validateProvider(provider);
   const keyStore = new ProviderKeyStore(deps.db);
   const keyId = keyStore.addKey(profile.name, prov, apiKey, opts);
+  // The router resolves the ACTIVE profile, cached against the pointer file's
+  // mtime. Dropping the cache here means a key added in the Providers tab is
+  // usable by a running gateway on its very next request, with no restart and
+  // no dependency on filesystem timestamp granularity.
+  clearProfileBinding();
   return { key_id: keyId, provider: prov, message: `API key added for ${prov}.` };
 }
 
@@ -38,6 +45,7 @@ export function removeProviderKey(deps: ToolDeps, provider: string, keyId: strin
   const prov = validateProvider(provider);
   const keyStore = new ProviderKeyStore(deps.db);
   keyStore.removeKey(profile.name, prov, keyId);
+  clearProfileBinding();
   return { message: `Key removed from ${prov}.` };
 }
 
@@ -79,49 +87,40 @@ export function toggleProviderKey(deps: ToolDeps, provider: string, keyId: strin
 export async function discoverProviderModels(deps: ToolDeps, provider: string) {
   const profile = requireActiveProfile(deps);
   const prov = validateProvider(provider);
-  const keyStore = new ProviderKeyStore(deps.db);
-  const modelStore = new ProviderModelStore(deps.db);
 
-  const keys = keyStore.availableKeys(profile.name, prov);
-  if (keys.length === 0) {
+  // The shared implementation, so the Providers tab and the router discover
+  // IDENTICALLY. This copy used to hardcode the omniroute base URL while the
+  // router honoured the key's `gateway_url` -- so a key with a custom gateway
+  // was discovered here and not there, which reads as "the provider has no
+  // models" rather than as a bug.
+  const outcome = await discoverModels(deps.db, prov, { profile: profile.name });
+  if (!outcome.ok) {
     throw new NanitesError({
-      code: "all_keys_exhausted",
-      message: `No available API keys for ${prov}. Add a key first.`,
+      code: outcome.code,
+      message: outcome.message,
       retryable: false,
+      details: { provider: prov },
     });
   }
 
-  const key = keys[0]!;
-  const baseUrl = prov === "omniroute" ? "http://localhost:20128/v1"
-    : prov === "generic" ? (key.gateway_url ?? "http://localhost:8080/v1")
-    : undefined;
-  const client = createProviderClient(prov, baseUrl);
-
-  let result;
-  if (prov === "cloudflare") {
-    if (!key.account_id) throw new NanitesError({ code: "invalid_arguments", message: "Cloudflare key requires account_id", retryable: false });
-    result = await client.listModels(key.api_key, key.account_id);
-  } else if (prov === "openrouter") {
-    result = await client.listModels(key.api_key);
-  } else {
-    // Generic / OmniRoute: base URL from key
-    const base = prov === "generic" ? (key.gateway_url ?? "http://localhost:8080/v1") : "http://localhost:20128/v1";
-    const genericClient = new GenericClient(base);
-    result = await genericClient.listModels(key.api_key);
-  }
-
-  modelStore.upsertModels(profile.name, prov, result.models);
+  // Re-read for the preview list. The upsert already happened inside the shared
+  // function; this only shapes what goes into the orchestrator's context.
+  const stored = new ProviderModelStore(deps.db)
+    .listModels(profile.name, prov)
+    .filter((m) => m.is_registered);
 
   return {
     provider: prov,
-    discovered: result.models.length,
-    models: result.models.slice(0, 20).map((m) => ({
-      id: m.id,
-      name: m.name ?? m.id,
+    discovered: outcome.model_count,
+    // Truncated on purpose: this result goes into the orchestrator's context,
+    // which has a budget the gateway's catalog endpoint does not.
+    models: stored.slice(0, 20).map((m) => ({
+      id: m.model_id,
+      name: m.name ?? m.model_id,
       owned_by: m.owned_by,
-      context_length: m.context_length,
+      context_length: m.context_window,
     })),
-    note: `Discovered ${result.models.length} models. Use /nanites-registerModel to register specific ones.`,
+    note: `Discovered ${outcome.model_count} models. Use /nanites-registerModel to register specific ones.`,
   };
 }
 

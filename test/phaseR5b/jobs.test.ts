@@ -19,12 +19,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { startRouter, type StartedRouter } from "../../src/router/deps.js";
 import { ProviderKeyStore } from "../../src/storage/providerKeyStore.js";
 import { ProviderModelStore } from "../../src/storage/providerModelStore.js";
-import { ROUTER_PROFILE } from "../../src/router/constants.js";
 import { JobStore } from "../../src/router/jobs/store.js";
 import { runJob } from "../../src/router/jobs/runner.js";
 import { openNanitesDb } from "../../src/storage/db.js";
 import { findCfModel } from "../../src/router/providers/cloudflare/catalog.js";
-import { scratchHome, cleanup } from "../phase3/helpers.js";
+import { scratchHome, cleanup, TEST_PROFILE, writeActiveProfile } from "../phase3/helpers.js";
 
 const homes: string[] = [];
 const servers: StartedRouter[] = [];
@@ -62,11 +61,12 @@ const noSleep = async (): Promise<void> => undefined;
 
 async function harness() {
   const h = scratchHome();
+  writeActiveProfile(h);
   homes.push(h);
   const handle = await startRouter({ home: h, port: 0, bind: "127.0.0.1", env: {} });
   servers.push(handle);
-  new ProviderKeyStore(handle.deps.db).addKey(ROUTER_PROFILE, "cloudflare", "cf-token", { accountId: "acct" });
-  new ProviderModelStore(handle.deps.db).registerModel(ROUTER_PROFILE, "cloudflare", MODEL);
+  new ProviderKeyStore(handle.deps.db).addKey(TEST_PROFILE, "cloudflare", "cf-token", { accountId: "acct" });
+  new ProviderModelStore(handle.deps.db).registerModel(TEST_PROFILE, "cloudflare", MODEL);
   const key = handle.deps.generatedKey!;
   return {
     handle, key, db: handle.deps.db,
@@ -152,6 +152,7 @@ describe("job store", () => {
 
 function harnessDb(): import("node:sqlite").DatabaseSync {
   const home = scratchHome();
+  writeActiveProfile(home);
   homes.push(home);
   const { db, close } = openNanitesDb(home);
   opened.push({ close });

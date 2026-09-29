@@ -11,11 +11,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { startRouter, type StartedRouter } from "../../src/router/deps.js";
 import { ProviderKeyStore } from "../../src/storage/providerKeyStore.js";
 import { ProviderModelStore } from "../../src/storage/providerModelStore.js";
-import { ROUTER_PROFILE } from "../../src/router/constants.js";
 import { walkChain, isRealAnswer, isWalkable, setAlias, getAlias, listAliases, deleteAlias, setStickyWinner, type ChainCandidate } from "../../src/router/models/aliases.js";
 import { setAdvertised, listAdvertised, getAdvertised, deleteAdvertised, renderOpenAiCatalog, renderAnthropicCatalog } from "../../src/router/models/catalog.js";
 import { NanitesError } from "../../src/helpers/errors.js";
-import { scratchHome, cleanup } from "../phase3/helpers.js";
+import { scratchHome, cleanup, TEST_PROFILE, writeActiveProfile } from "../phase3/helpers.js";
 
 const homes: string[] = [];
 const servers: StartedRouter[] = [];
@@ -162,6 +161,7 @@ describe("walkability classification", () => {
  */
 async function harness() {
   const h = scratchHome();
+  writeActiveProfile(h);
   homes.push(h);
   const handle = await startRouter({ home: h, port: 0, bind: "127.0.0.1", env: {} });
   servers.push(handle);
@@ -176,7 +176,7 @@ async function harness() {
 }
 
 function seedModels(modelStore: ProviderModelStore, ids: string[], provider = "openrouter"): void {
-  for (const id of ids) modelStore.registerModel(ROUTER_PROFILE, provider as never, id);
+  for (const id of ids) modelStore.registerModel(TEST_PROFILE, provider as never, id);
 }
 
 describe("alias persistence", () => {

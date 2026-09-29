@@ -11,9 +11,12 @@ import { ensureNanitesHome } from "../config/paths.js";
 import { resolveVirtualKey, readConfig, type RouterConfigRow } from "./auth.js";
 import { startRouterServer, DEFAULT_ROUTER_PORT, DEFAULT_ROUTER_BIND, type RouterServerHandle } from "./server.js";
 import { TUNNEL_OFF, type TunnelHandle, type TunnelState } from "./transport/tunnel.js";
+import { setRouterHome } from "./constants.js";
 
 export interface RouterDeps {
   db: DatabaseSync;
+  /** The NANITES_HOME this router was started against. */
+  home: string;
   keyHash: string;
   /** Printed once on first boot. Null when an existing key was reused. */
   generatedKey: string | null;
@@ -38,6 +41,7 @@ export function buildRouterDeps(home?: string, env: NodeJS.ProcessEnv = process.
   const resolved = resolveVirtualKey(opened.db, env);
   return {
     db: opened.db,
+    home: opened.home,
     keyHash: resolved.hash,
     generatedKey: resolved.generated,
     config: () => readConfig(opened.db),
@@ -54,6 +58,9 @@ export interface StartedRouter extends RouterServerHandle {
 export async function startRouter(opts: StartRouterOptions = {}): Promise<StartedRouter> {
   const env = opts.env ?? process.env;
   const deps = buildRouterDeps(opts.home, env);
+  // Bind BEFORE anything can make a store call, so every provider lookup in
+  // this process resolves against the database this router opened.
+  setRouterHome(deps.home);
 
   // An explicit env var wins over the stored default so a user can move the
   // port without editing the database.

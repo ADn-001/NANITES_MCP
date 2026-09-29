@@ -3,7 +3,7 @@
  *
  * Writes the router's config row DIRECTLY rather than calling
  * `PATCH /v1/config` over HTTP. The MCP server and the router share one
- * `nanites.db` (see src/storage/db.ts and ROUTER_PROFILE), so the HTTP hop
+ * `nanites.db` (see src/storage/db.ts and routerProfile()), so the HTTP hop
  * would add a network round trip and a hard dependency on the router process
  * being up — for a setting that must be changeable precisely when the router
  * is not behaving.
@@ -16,7 +16,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { NanitesError } from "../helpers/errors.js";
 import { updateConfig, readConfig } from "../router/auth.js";
-import { ROUTER_PROFILE } from "../router/constants.js";
+import { routerProfile } from "../router/constants.js";
 import {
   HELPER_FEATURES,
   HELPER_FEATURE_NAMES,
@@ -128,6 +128,6 @@ export function applyHelperToggle(
     workers_stopped: workersStopped,
     note: workersStopped === false
       ? "Helpers are off and no request will use them. The running router still holds the loaded model in memory; it is released on restart, or immediately via PATCH /v1/config {\"enable_helpers\":false} against the live router."
-      : `Router profile: ${ROUTER_PROFILE}. Every feature defaults to off.`,
+      : `Router profile: ${routerProfile()}. Every feature defaults to off.`,
   };
 }

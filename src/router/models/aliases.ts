@@ -15,7 +15,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { NanitesError } from "../../helpers/errors.js";
 import { ProviderModelStore } from "../../storage/providerModelStore.js";
 import { nowIso } from "../../storage/db.js";
-import { ROUTER_PROFILE } from "../constants.js";
+import { routerProfile } from "../constants.js";
 
 export interface ChainCandidate {
   provider: string;
@@ -174,7 +174,7 @@ export function setAlias(db: DatabaseSync, alias: string, candidates: ChainCandi
 
   const store = new ProviderModelStore(db);
   for (const [i, c] of candidates.entries()) {
-    const known = store.getModel(ROUTER_PROFILE, c.provider as never, c.model_id);
+    const known = store.getModel(routerProfile(), c.provider as never, c.model_id);
     if (!known) {
       throw new NanitesError({
         code: "alias_candidate_unknown",

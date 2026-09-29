@@ -13,8 +13,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { startRouter, type StartedRouter } from "../../src/router/deps.js";
 import { ProviderKeyStore } from "../../src/storage/providerKeyStore.js";
 import { ProviderModelStore } from "../../src/storage/providerModelStore.js";
-import { ROUTER_PROFILE } from "../../src/router/constants.js";
-import { scratchHome, cleanup } from "../phase3/helpers.js";
+import { scratchHome, cleanup, TEST_PROFILE, writeActiveProfile } from "../phase3/helpers.js";
 
 const homes: string[] = [];
 const servers: StartedRouter[] = [];
@@ -114,16 +113,17 @@ interface Harness {
 
 async function harness(opts: StubOptions = {}): Promise<Harness & { calls: WireCall[] }> {
   const h = scratchHome();
+  writeActiveProfile(h);
   homes.push(h);
   const handle = await startRouter({ home: h, port: 0, bind: "127.0.0.1", env: {} });
   servers.push(handle);
   const key = handle.deps.generatedKey!;
 
   const keyStore = new ProviderKeyStore(handle.deps.db);
-  keyStore.addKey(ROUTER_PROFILE, "openrouter", "sk-test-key", { accountId: null });
+  keyStore.addKey(TEST_PROFILE, "openrouter", "sk-test-key", { accountId: null });
 
   const modelStore = new ProviderModelStore(handle.deps.db);
-  modelStore.registerModel(ROUTER_PROFILE, "openrouter", "qwen/qwen3-8b");
+  modelStore.registerModel(TEST_PROFILE, "openrouter", "qwen/qwen3-8b");
 
   const calls: WireCall[] = [];
   stubProvider(calls, opts);
@@ -190,11 +190,11 @@ describe("R1 — gateway end to end", () => {
     // be correct — so that case proves nothing. This one does: a model id
     // that ITSELF begins with a provider-like segment.
     const keyStore = new ProviderKeyStore(h.handle.deps.db);
-    keyStore.addKey(ROUTER_PROFILE, "generic", "sk-generic", {
+    keyStore.addKey(TEST_PROFILE, "generic", "sk-generic", {
       gatewayUrl: "https://gw.test/v1", nickname: "gw",
     });
     const modelStore = new ProviderModelStore(h.handle.deps.db);
-    modelStore.registerModel(ROUTER_PROFILE, "generic", "openrouter:inner-model");
+    modelStore.registerModel(TEST_PROFILE, "generic", "openrouter:inner-model");
 
     const res = await h.post("/v1/chat/completions", {
       model: "generic:gw:openrouter:inner-model",
@@ -326,11 +326,11 @@ describe("R1 — gateway end to end", () => {
     // A second provider serving the same bare id is the exact ambiguity that
     // made the MCP server's cloud routing wrong. It must NOT pick the first.
     const keyStore = new ProviderKeyStore(h.handle.deps.db);
-    keyStore.addKey(ROUTER_PROFILE, "generic", "sk-generic", {
+    keyStore.addKey(TEST_PROFILE, "generic", "sk-generic", {
       gatewayUrl: "https://gw.test/v1", nickname: "gw",
     });
     const modelStore = new ProviderModelStore(h.handle.deps.db);
-    modelStore.registerModel(ROUTER_PROFILE, "generic", "qwen/qwen3-8b");
+    modelStore.registerModel(TEST_PROFILE, "generic", "qwen/qwen3-8b");
 
     const res = await h.post("/v1/chat/completions", {
       model: "qwen/qwen3-8b",
