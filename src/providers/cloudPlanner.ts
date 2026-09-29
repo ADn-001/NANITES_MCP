@@ -149,13 +149,25 @@ export function buildCloudChatRequest(
   systemPrompt?: string,
   tools?: ProviderToolDef[],
   responseFormat?: ResponseFormat,
+  /**
+   * Prepend the `[INTERNAL_CALL_UID: ...]` marker.
+   *
+   * On by default because the MCP server's cloud tool loop reads it back out
+   * of the transcript to correlate a provider turn with a call log row. The
+   * nanites-router gateway does NOT: it has its own call-log id and its caller
+   * is a third-party harness, so shipping a Nanites-internal identifier to
+   * OpenRouter/Cloudflare/NIM is both a leak and a token cost on every single
+   * request. The gateway passes false.
+   */
+  injectCallUid = true,
 ): ChatRequest {
   const msgs: ChatMessage[] = [];
   if (systemPrompt) {
     msgs.push({ role: "system", content: systemPrompt });
   }
-  // Inject call_uid for parallel tracking
-  msgs.push({ role: "system", content: `[INTERNAL_CALL_UID: ${plan.call_uid}]` });
+  if (injectCallUid) {
+    msgs.push({ role: "system", content: `[INTERNAL_CALL_UID: ${plan.call_uid}]` });
+  }
   msgs.push(...messages);
 
   // Cloudflare deprecates `max_tokens` in favour of `max_completion_tokens`
@@ -221,6 +233,8 @@ export async function chatWithBudgetRetry(
   systemPrompt?: string,
   tools?: ProviderToolDef[],
   responseFormat?: ResponseFormat,
+  /** See buildCloudChatRequest. Defaults true for the MCP server; the gateway passes false. */
+  injectCallUid = true,
 ): Promise<ChatResponse> {
   // A generic model id may carry its endpoint namespace
   // (`generic:<endpoint>:<model>`) so the router can pin the call to one
@@ -229,11 +243,11 @@ export async function chatWithBudgetRetry(
   // the doubled-budget retry below, which is why the router cannot strip it at
   // its own call site and expect the retry to inherit the fix.
   const wireModel = wireModelId(model);
-  const resp = await send(buildCloudChatRequest(plan, provider, wireModel, messages, systemPrompt, tools, responseFormat));
+  const resp = await send(buildCloudChatRequest(plan, provider, wireModel, messages, systemPrompt, tools, responseFormat, injectCallUid));
   if (!isEmptyCloudReply(resp)) return resp;
 
   const doubled = doubleCloudBudget(plan);
-  const retryResp = await send(buildCloudChatRequest(doubled, provider, wireModel, messages, systemPrompt, tools, responseFormat));
+  const retryResp = await send(buildCloudChatRequest(doubled, provider, wireModel, messages, systemPrompt, tools, responseFormat, injectCallUid));
   if (!isEmptyCloudReply(retryResp)) return retryResp;
 
   throw new NanitesError({

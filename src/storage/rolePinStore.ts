@@ -30,6 +30,7 @@ export const PIN_PROVIDERS: readonly string[] = [
   "openrouter",
   "omniroute",
   "generic",
+  "nvidia",
 ];
 
 interface RolePinRow {
