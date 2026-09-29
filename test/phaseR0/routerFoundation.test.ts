@@ -149,6 +149,7 @@ describe("R0.2 — storage", () => {
       "router_key_metrics",
       "router_modality_pins",
       "router_sticky",
+      "router_traffic",
     ]);
 
     const version = d.db.prepare("PRAGMA user_version").get() as { user_version: number };

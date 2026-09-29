@@ -132,6 +132,10 @@ export interface RouterConfigRow {
   feature_structured_output: number;
   feature_laya_preflight: number;
   feature_laya_postflight: number;
+  /** 1 = record inbound requests to router_traffic. Off by default. */
+  traffic_log_enabled: number;
+  /** Per-record character cap for the logged text. */
+  traffic_log_max_chars: number;
   tunnel_enabled: number;
   tunnel_url: string | null;
   created_at: string;
@@ -168,6 +172,8 @@ function rowToConfig(row: Record<string, unknown>): RouterConfigRow {
     feature_structured_output: num(row.feature_structured_output),
     feature_laya_preflight: num(row.feature_laya_preflight),
     feature_laya_postflight: num(row.feature_laya_postflight),
+    traffic_log_enabled: num(row.traffic_log_enabled),
+    traffic_log_max_chars: num(row.traffic_log_max_chars) || 4000,
     tunnel_enabled: Number(row.tunnel_enabled),
     tunnel_url: nullableString(row.tunnel_url),
     created_at: String(row.created_at),
@@ -219,6 +225,10 @@ const WRITABLE_FLAGS = [
   "feature_structured_output",
   "feature_laya_preflight",
   "feature_laya_postflight",
+  // Opt-in request logging. Not a helper feature, but it is the same kind of
+  // switch: a setting that changes what the router writes to disk, writable
+  // only by someone holding the virtual key.
+  "traffic_log_enabled",
 ] as const;
 
 export type WritableFlag = (typeof WRITABLE_FLAGS)[number];
@@ -240,6 +250,20 @@ export function updateConfig(db: DatabaseSync, patch: Record<string, unknown>): 
         details: { key, writable: [...WRITABLE_FLAGS] },
       });
     }
+    // max_chars is the one integer flag: a bound on a text field, where a
+    // boolean would be meaningless.
+    if (key === "traffic_log_max_chars") {
+      const n = Number(patch[key]);
+      if (!Number.isFinite(n)) {
+        throw new NanitesError({
+          code: "router_invalid_request",
+          message: "traffic_log_max_chars must be a number.",
+          retryable: false,
+          details: { key },
+        });
+      }
+      continue;
+    }
     if (typeof patch[key] !== "boolean") {
       throw new NanitesError({
         code: "router_invalid_request",
@@ -252,7 +276,7 @@ export function updateConfig(db: DatabaseSync, patch: Record<string, unknown>): 
   if (Object.keys(patch).length > 0) {
     const sets = Object.keys(patch).map((k) => `${k} = ?`).join(", ");
     db.prepare(`UPDATE router_config SET ${sets}, updated_at = ? WHERE id = 1`)
-      .run(...Object.values(patch).map((v) => (v ? 1 : 0)), nowIso());
+      .run(...Object.values(patch).map((v) => (v === true ? 1 : v === false ? 0 : Number(v))), nowIso());
   }
   return ensureConfigRow(db);
 }

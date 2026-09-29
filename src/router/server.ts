@@ -53,6 +53,7 @@ function estimateInputTokens(request: IRRequest): number {
 import { dispatchWithFailover } from "./outbound/dispatch.js";
 import { routerProfile } from "./constants.js";
 import { providerKeyCounts } from "./providers/inventory.js";
+import { logRequest, exportTraffic, trafficStats, setTrafficLog, trafficLogEnabled } from "./trafficLog.js";
 
 /** Distinct from the dashboard's 4700 so both can run simultaneously. */
 export const DEFAULT_ROUTER_PORT = 4800;
@@ -519,6 +520,14 @@ async function handleInference(
     ? encodeAnthropicResponse(response, `msg_${randomUUID()}`)
     : encodeOpenAiResponse(response, `chatcmpl_${randomUUID()}`, Math.floor(Date.now() / 1000));
 
+  // After the response is built and BEFORE it is sent: a logging failure must
+  // never turn a completed, billed request into an error.
+  logRequest(opts.db, {
+    request, provider: target.provider,
+    dialect: anthropicPath ? "anthropic" : "openai",
+    status: 200, latencyMs: response.latency_ms,
+  });
+
   sendJson(res, 200, payload);
 }
 
@@ -923,6 +932,49 @@ async function handle(
       }));
     sendJson(res, 200, renderCatalog([...advertised, ...helperModels], dialect));
     return;
+  }
+
+  // --- opt-in request logging ---
+  if (pathname === "/v1/traffic" || pathname === "/v1/traffic/") {
+    if (req.method === "GET" && url.searchParams.get("export") === "1") {
+      // A SINGLE self-contained file, because the intended workflow is: let
+      // it collect, email yourself this, drag it into an offline labeling app.
+      const out = exportTraffic(opts.db, {
+        since: url.searchParams.get("since") ?? undefined,
+        until: url.searchParams.get("until") ?? undefined,
+        limit: url.searchParams.get("limit") ? Number(url.searchParams.get("limit")) : undefined,
+      });
+      res.writeHead(200, {
+        "content-type": "application/json; charset=utf-8",
+        "content-disposition": `attachment; filename="${out.filename}"`,
+        "content-length": Buffer.byteLength(out.content),
+      });
+      res.end(out.content);
+      return;
+    }
+    if (req.method === "GET") {
+      sendJson(res, 200, trafficStats(opts.db));
+      return;
+    }
+    if (req.method === "POST" || req.method === "PATCH") {
+      let body: { enabled?: boolean; max_chars?: number } = {};
+      const raw = await readBodyText(req);
+      if (raw.trim()) {
+        try {
+          body = JSON.parse(raw) as typeof body;
+        } catch {
+          sendError(res, dialect, 400, "router_invalid_request", "Body must be JSON.");
+          return;
+        }
+      }
+      if (body.enabled === undefined && body.max_chars === undefined) {
+        sendError(res, dialect, 400, "router_invalid_request", "Pass { enabled: boolean } and/or { max_chars: number }.");
+        return;
+      }
+      setTrafficLog(opts.db, body.enabled === true, body.max_chars);
+      sendJson(res, 200, trafficStats(opts.db));
+      return;
+    }
   }
 
   if (req.method === "GET" && (pathname === "/v1/keys" || pathname === "/v1/keys/")) {

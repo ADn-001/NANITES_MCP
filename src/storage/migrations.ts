@@ -638,6 +638,21 @@ export const MIGRATIONS: Migration[] = [
     version: 27,
     sql: "",
   },
+  {
+    // Opt-in request logging, for collecting real traffic to train on.
+    //
+    // The router had NO inbound request log at all, which meant "collect real
+    // data" was not something you could turn on -- it was a thing that had to
+    // be built. This is that thing, and it is off by default: a request log is
+    // exactly where a user pastes a credential by accident, and the redaction
+    // below is a default rather than a promise.
+    //
+    // Logs live in a SEPARATE table, not in `router_jobs`, for one reason:
+    // the export path must be drag-and-droppable into an offline labeling app
+    // without dragging unrelated state along with it.
+    version: 28,
+    sql: "",
+  },
 ];
 
 /**
@@ -650,7 +665,7 @@ export const MIGRATIONS: Migration[] = [
  * dead namespace and the gateway still resolves nothing. Passing the home in
  * is what makes that impossible.
  */
-export function applyMigrations(db: DatabaseSync, home: string): void {
+export function applyMigrations(db: DatabaseSync, home?: string): void {
   const row = db.prepare("PRAGMA user_version").get() as { user_version: number } | undefined;
   const current = Number(row?.user_version ?? 0);
   for (const migration of MIGRATIONS) {
@@ -704,8 +719,10 @@ export function applyMigrations(db: DatabaseSync, home: string): void {
             db.exec(`ALTER TABLE router_config ADD COLUMN ${name} ${decl}`);
           }
         }
+      } else if (migration.version === 28) {
+        addTrafficLogColumns(db);
       } else if (migration.version === 27) {
-        migrateLegacyRouterRows(db, home);
+        migrateLegacyRouterRows(db, home ?? defaultHome());
       } else if (migration.version === 17) {
         // Idempotent: add the nullable provider column to model_registry if missing.
         const cols = db.prepare("PRAGMA table_info(model_registry)").all() as Array<{ name: string }>;
@@ -850,6 +867,18 @@ export function applyMigrations(db: DatabaseSync, home: string): void {
 }
 
 /**
+ * The home used when a caller does not supply one.
+ *
+ * Only migration 27 needs it. Every other migration is pure schema, so a
+ * one-argument `applyMigrations(db)` -- which is what most tests and any
+ * in-memory harness do -- must keep working rather than throw.
+ */
+function defaultHome(): string {
+  const base = process.env["USERPROFILE"] ?? process.env["HOME"] ?? ".";
+  return path.join(base, ".nanites");
+}
+
+/**
  * Copy `__router__` provider keys and models onto the active profile.
  *
  * INSERT OR IGNORE, not UPDATE: the destination may already hold the same
@@ -874,6 +903,14 @@ function migrateLegacyRouterRows(db: DatabaseSync, home: string): void {
   if (!active) return;
   if (active === "__router__") return;
 
+  // A genuinely old database may predate these tables entirely — the phase53
+  // harness builds a v20-era schema — and querying a missing table THROWS,
+  // which rolled the whole migration back and stranded the database below the
+  // top version. Nothing to migrate is not an error.
+  const hasTable = (name: string): boolean =>
+    db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !== undefined;
+  if (!hasTable("provider_api_keys") && !hasTable("provider_models")) return;
+
   const legacyCount = db.prepare(
     "SELECT COUNT(*) AS n FROM provider_api_keys WHERE profile_name = ?",
   ).get("__router__") as { n: number };
@@ -884,7 +921,7 @@ function migrateLegacyRouterRows(db: DatabaseSync, home: string): void {
   // absence of legacy rows is the proof that it already ran.
   if (Number(legacyCount.n) === 0 && Number(modelCount.n) === 0) return;
 
-  db.prepare(`
+  if (hasTable("provider_api_keys")) db.prepare(`
     INSERT OR IGNORE INTO provider_api_keys
       (profile_name, provider, key_id, api_key, account_id, gateway_url, nickname,
        is_enabled, is_exhausted, exhausted_until, consecutive_failures, created_at)
@@ -892,7 +929,7 @@ function migrateLegacyRouterRows(db: DatabaseSync, home: string): void {
            is_enabled, is_exhausted, exhausted_until, consecutive_failures, created_at
       FROM provider_api_keys WHERE profile_name = '__router__'
   `).run(active);
-  db.prepare(`
+  if (hasTable("provider_models")) db.prepare(`
     INSERT OR IGNORE INTO provider_models
       (profile_name, provider, model_id, name, owned_by, context_window, max_output_tokens,
        pricing_prompt, pricing_completion, capabilities, supported_modalities, is_registered,
@@ -902,4 +939,47 @@ function migrateLegacyRouterRows(db: DatabaseSync, home: string): void {
            performance_score, last_refreshed, created_at, updated_at
       FROM provider_models WHERE profile_name = '__router__'
   `).run(active);
+}
+
+/**
+ * The opt-in traffic log.
+ *
+ * Idempotent per statement, like 14/15/16/26. `enabled` is a COLUMN rather than
+ * a config flag so the hot path reads one integer instead of parsing config,
+ * and so a log cannot be left on by a config edit that silently failed.
+ */
+function addTrafficLogColumns(db: DatabaseSync): void {
+  const have = new Set(
+    (db.prepare("PRAGMA table_info(router_config)").all() as Array<{ name: string }>).map((c) => c.name),
+  );
+  if (!have.has("traffic_log_enabled")) {
+    db.exec("ALTER TABLE router_config ADD COLUMN traffic_log_enabled INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!have.has("traffic_log_max_chars")) {
+    db.exec("ALTER TABLE router_config ADD COLUMN traffic_log_max_chars INTEGER NOT NULL DEFAULT 4000");
+  }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS router_traffic (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      created_at  TEXT NOT NULL,
+      model       TEXT,
+      provider    TEXT,
+      dialect     TEXT,
+      status      INTEGER,
+      latency_ms  INTEGER,
+      -- The last user turn, redacted and length-bounded. This is the field
+      -- the labeling app reads; everything else is context for it.
+      last_user   TEXT,
+      system_head TEXT,
+      tool_names  TEXT,
+      n_messages  INTEGER,
+      n_tools     INTEGER,
+      has_media   INTEGER NOT NULL DEFAULT 0,
+      stream      INTEGER NOT NULL DEFAULT 0,
+      error_code  TEXT
+    )
+  `);
+  // The export is a full table scan filtered by date; without this it is one.
+  db.exec("CREATE INDEX IF NOT EXISTS idx_traffic_created ON router_traffic (created_at)");
 }
