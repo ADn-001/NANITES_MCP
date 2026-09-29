@@ -202,6 +202,31 @@ export class ProviderModelStore {
   }
 
 
+  /**
+   * Update a model's capabilities and supported modalities.
+   *
+   * Separate from `upsertModels` because discovery can only say what EXISTS,
+   * not what a model can DO — Cloudflare's catalog publishes no usable
+   * modality map for its non-text models. Without this the capability columns
+   * stay empty, and the modality planner treats empty as "not a candidate",
+   * which hides every image and audio model.
+   *
+   * Modifies no other column, so a refresh cannot clobber pricing or a
+   * user-set nickname.
+   */
+  updateModalities(
+    profileName: string,
+    provider: ProviderKind,
+    modelId: string,
+    modalities: string[],
+    capabilities: ProviderCapabilities,
+  ): void {
+    this.db.prepare(`
+      UPDATE provider_models SET capabilities=?, supported_modalities=?
+      WHERE profile_name=? AND provider=? AND model_id=?
+    `).run(JSON.stringify(capabilities), JSON.stringify(modalities), profileName, provider, modelId);
+  }
+
   /** Update nickname for a model. */
   setNickname(profileName: string, provider: ProviderKind, modelId: string, nickname: string | null): void {
     this.db.prepare(`UPDATE provider_models SET nickname=? WHERE profile_name=? AND provider=? AND model_id=?`).run(nickname, profileName, provider, modelId);

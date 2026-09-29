@@ -20,10 +20,13 @@ import { NanitesError } from "../helpers/errors.js";
 import { decodeAnthropicRequest, encodeAnthropicResponse } from "./inbound/anthropic.js";
 import { decodeOpenAiRequest, encodeOpenAiResponse } from "./inbound/openai.js";
 import { resolveTarget, type ResolvedTarget } from "./outbound/resolve.js";
+import { listAdvertised, renderCatalog } from "./models/catalog.js";
+import { getAlias, walkChain, setStickyWinner, type ChainCandidate } from "./models/aliases.js";
 import { createSseWriter } from "./stream/sse.js";
 import { createAnthropicStream, type AnthropicStreamEncoder } from "./stream/anthropicStream.js";
 import { createOpenAiStream, type OpenAiStreamEncoder } from "./stream/openaiStream.js";
 import { openUpstreamStream, type OpenedUpstream } from "./outbound/streamDispatch.js";
+import { needsRunPath, dispatchCfRun, toIRResponse } from "./outbound/cloudflareRun.js";
 import type { IRRequest } from "./ir/types.js";
 import { countTokens } from "../helpers/tokenize.js";
 import { partsToText } from "./ir/types.js";
@@ -205,6 +208,7 @@ function statusForCode(code: string): number {
       return 404;
     case "provider_rate_limited":
       return 429;
+    case "provider_quota_exhausted":
     case "provider_insufficient_credits":
     case "all_keys_exhausted":
     case "provider_key_required":
@@ -254,7 +258,82 @@ async function handleInference(
 
   const request = anthropicPath ? decodeAnthropicRequest(body) : decodeOpenAiRequest(body);
 
+  // An alias is a CHAIN, not a single target. Resolve it first; a bare
+  // advertised name or a namespaced id resolves to exactly one candidate and
+  // skips the walk.
+  const alias = request.model.includes(":") ? null : getAlias(opts.db, request.model);
+  if (alias) {
+    const startAt = alias.sticky_winner ?? 0;
+    try {
+      const walked = await walkChain(
+        alias.alias,
+        alias.candidates,
+        startAt,
+        async (candidate: ChainCandidate) => {
+          const resolved: ResolvedTarget = {
+            provider: candidate.provider as never,
+            endpoint: candidate.endpoint ?? null,
+            model_id: candidate.model_id,
+            stored_id: candidate.endpoint
+              ? `${candidate.provider}:${candidate.endpoint}:${candidate.model_id}`
+              : `${candidate.provider}:${candidate.model_id}`,
+          };
+          const hop: IRRequest = candidate.max_output_tokens
+            ? { ...request, max_output_tokens: candidate.max_output_tokens }
+            : request;
+          const out = await dispatchWithFailover({ db: opts.db, target: resolved, request: hop });
+          return { content: out.content, tool_calls: out.tool_calls };
+        },
+      );
+      setStickyWinner(opts.db, alias.alias, walked.winner);
+    } catch (err) {
+      const code = (err as { code?: string }).code ?? "chain_exhausted";
+      const message = (err as Error).message;
+      sendError(res, dialect, statusForCode(code), code, message);
+      return;
+    }
+    // The chain walker returns the raw answer shape; re-dispatch the winner so
+    // the caller gets the full response with usage and served_by.
+    const target = resolveTarget(opts.db, request.model);
+    const response = await dispatchWithFailover({ db: opts.db, target, request });
+    const payload = anthropicPath
+      ? encodeAnthropicResponse(response, `msg_${randomUUID()}`)
+      : encodeOpenAiResponse(response, `chatcmpl_${randomUUID()}`, Math.floor(Date.now() / 1000));
+    sendJson(res, 200, payload);
+    return;
+  }
+
   const target = resolveTarget(opts.db, request.model);
+
+  // A Cloudflare model outside the chat-completions shim goes to /ai/run,
+  // which serves image, TTS, ASR, and the VQA models. Text-generation models
+  // deliberately do NOT come here — the existing OpenAI-compatible path
+  // already handles them, and the chat shim is the better-tested one.
+  if (target.provider === "cloudflare" && needsRunPath(target.model_id)) {
+    try {
+      const run = await dispatchCfRun({ db: opts.db, target, request });
+      const ir = toIRResponse(run, request);
+      // A modality reply is not a chat completion. The OpenAI image shape is
+      // what a client expects for a generation request, so an artifact is
+      // rendered as `data[0].b64_json` rather than as message content.
+      if (run.artifact) {
+        sendJson(res, 200, {
+          created: Math.floor(Date.now() / 1000),
+          model: request.model,
+          data: [{ b64_json: run.artifact.b64, mime_type: run.artifact.mime }],
+        });
+        return;
+      }
+      const payload = anthropicPath
+        ? encodeAnthropicResponse(ir, `msg_${randomUUID()}`)
+        : encodeOpenAiResponse(ir, `chatcmpl_${randomUUID()}`, Math.floor(Date.now() / 1000));
+      sendJson(res, 200, payload);
+    } catch (err) {
+      const code = (err as { code?: string }).code ?? "unexpected_error";
+      sendError(res, dialect, statusForCode(code), code, (err as Error).message);
+    }
+    return;
+  }
 
   if (request.stream) {
     await handleStreaming(req, res, opts, anthropicPath, target, request);
@@ -432,6 +511,15 @@ async function handle(
 
   if (req.method === "GET" && (pathname === "/v1/health" || pathname === "/v1/health/")) {
     sendJson(res, 200, buildHealth(opts, port, bind, startedAt));
+    return;
+  }
+
+  if (req.method === "GET" && (pathname === "/v1/models" || pathname === "/v1/models/")) {
+    // ONLY the advertised subset. A harness pings this on connect, and
+    // returning the whole consolidated provider catalog would fill its model
+    // picker with ids the operator never chose to expose.
+    const advertised = listAdvertised(opts.db);
+    sendJson(res, 200, renderCatalog(advertised, dialect));
     return;
   }
 
