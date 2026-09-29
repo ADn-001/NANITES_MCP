@@ -241,6 +241,16 @@ const writeRegistryEntrySchema = z.object({
 });
 const shareTestResultsSchema = z.object({ profile: ID, source_profile: ID, model_id: ID.optional() });
 
+// The helper toggle. `features` is partial on purpose: naming one feature
+// leaves the others exactly as they were, which is the reason the flags are
+// per-feature rather than one bundled switch.
+const helperToggleSchema = z.object({
+  enable: z.boolean().optional(),
+  features: z.record(z.string(), z.boolean()).optional(),
+}).refine((v) => v.enable !== undefined || (v.features && Object.keys(v.features).length > 0), {
+  message: "Pass enable (boolean) and/or at least one feature.",
+});
+
 const toolIntegrationSchema = z.union([
   z.object({
     type: z.literal("plugin"),
@@ -825,6 +835,16 @@ function handleRegisterTestUnit(deps: ToolDeps, args: z.infer<typeof registerTes
   return { unit: stored };
 }
 
+async function handleHelperToggle(deps: ToolDeps, args: z.infer<typeof helperToggleSchema>) {
+  const { applyHelperToggle } = await import("./routerHelpers.js");
+  return applyHelperToggle(deps.db, { enable: args.enable, features: args.features as Record<string, boolean> | undefined });
+}
+
+async function handleReadHelperState(deps: ToolDeps, _args: unknown) {
+  const { readHelperState } = await import("./routerHelpers.js");
+  return readHelperState(deps.db);
+}
+
 async function handleSystemHealthCheck(deps: ToolDeps, args: z.infer<typeof systemHealthCheckSchema>) {
   const profile = deps.profiles.getProfile(args.profile);
   if (!profile) {
@@ -1201,6 +1221,16 @@ export function registerAllTools(server: McpServer, deps: ToolDeps, options: { u
     server, deps, "system_health_check", "System Health Check",
     "Check LM Studio health for a profile: endpoint reachability (with a one-shot lms server start autostart recovery and recheck), free disk space for downloads, and stuck-loaded-model detection. Returns an overall status (healthy/degraded/down) plus per-check sub-fields.",
     systemHealthCheckSchema, handleSystemHealthCheck,
+  );
+  register(
+    server, deps, "nanites_toggleHelpers", "Toggle Router Helpers",
+    "Turn the router's local helper models (Needle 3, Laya) on or off, per feature. With no arguments it reports current state. Pass enable to flip the master switch, or features to change individual ones (tool_repair, structured_output, laya_preflight, laya_postflight) without touching the rest. Every feature defaults OFF. Turning helpers off stops them being used in flight; the running router releases the loaded model on restart or via PATCH /v1/config.",
+    helperToggleSchema, handleHelperToggle,
+  );
+  register(
+    server, deps, "nanites_readHelperState", "Read Router Helper State",
+    "Report the router's helper feature flags, which helper serves each, and the measured evidence behind each one.",
+    z.object({}), handleReadHelperState,
   );
   register(
     server, deps, "send_ntfy", "Send Notification",

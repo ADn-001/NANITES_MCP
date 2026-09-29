@@ -29,7 +29,8 @@ import { openUpstreamStream, type OpenedUpstream } from "./outbound/streamDispat
 import { RateLimiter, DEFAULT_RATE_LIMIT } from "./security/rateLimit.js";
 import { startTunnel, type TunnelHandle } from "./transport/tunnel.js";
 import { JobStore, type JobRow } from "./jobs/store.js";
-import { helperStatus, warmHelpers, awaitProbeHelpers, guessModality, HELPER_ALIASES, dispatchHelper, runHelperOp, resolveHelperAlias, type HelperAlias } from "./helpers/registry.js";
+import { helperStatus, warmHelpers, awaitProbeHelpers, guessModality, helperFeatureFlags, featureReason, stopHelperWorkers, HELPER_ALIASES, dispatchHelper, runHelperOp, resolveHelperAlias, type HelperAlias } from "./helpers/registry.js";
+import { HELPER_FEATURE_NAMES, type HelperFeature } from "./helpers/features.js";
 import { runJob } from "./jobs/runner.js";
 import { needsRunPath, dispatchCfRun, toIRResponse, cfCategoryModality } from "./outbound/cloudflareRun.js";
 import type { IRRequest } from "./ir/types.js";
@@ -170,6 +171,32 @@ function providerKeyCounts(db: DatabaseSync): Array<{ provider: string; keys: nu
   } catch {
     return [];
   }
+}
+
+/**
+ * The body of GET and PATCH /v1/config.
+ *
+ * One shape for both, so a caller can read the result of a write with the same
+ * code it used to read the state. Reports the master flag, the per-feature
+ * flags, and EFFECTIVE availability per feature — a flag being on is not the
+ * same as the model being installed, and those need different fixes.
+ */
+function configPayload(db: DatabaseSync): Record<string, unknown> {
+  const c = readConfig(db);
+  const features = helperFeatureFlags(db);
+  const availability: Record<string, { enabled: boolean; available: boolean; reason: string }> = {};
+  for (const name of HELPER_FEATURE_NAMES) {
+    const enabled = features[name] === true;
+    const reason = featureReason(db, name as HelperFeature);
+    availability[name] = { enabled, available: enabled && reason === "", reason: enabled ? reason : (reason || "off") };
+  }
+  return {
+    enable_helpers: Boolean(c?.enable_helpers),
+    enable_model_repair: Boolean(c?.enable_model_repair),
+    features,
+    availability,
+    helpers: helperStatus(db),
+  };
 }
 
 function buildHealth(opts: RouterServerOptions, port: number, bind: string, startedAt: number): HealthPayloadShape {
@@ -694,13 +721,7 @@ async function handle(
   if (pathname === "/v1/config" || pathname === "/v1/config/") {
     if (req.method === "GET") {
       const c = readConfig(opts.db);
-      sendJson(res, 200, {
-        enable_helpers: Boolean(c?.enable_helpers),
-        enable_model_repair: Boolean(c?.enable_model_repair),
-        // Effective availability, so a caller can tell "off" from "on but the
-        // package is not installed" without a second request.
-        helpers: helperStatus(opts.db),
-      });
+      sendJson(res, 200, configPayload(opts.db));
       return;
     }
     if (req.method === "PATCH" || req.method === "POST") {
@@ -720,12 +741,19 @@ async function handle(
         // Turning helpers ON has to AWAIT the probe, not fire it: the response
         // reports availability, and an unawaited probe would answer "false" for
         // a model that is installed and about to load.
-        if (c.enable_helpers) await awaitProbeHelpers(opts.db);
-        sendJson(res, 200, {
-          enable_helpers: Boolean(c.enable_helpers),
-          enable_model_repair: Boolean(c.enable_model_repair),
-          helpers: helperStatus(opts.db),
-        });
+        //
+        // Turning them OFF is the opposite: the user-facing promise is that
+        // turning helpers off STOPS them being used in flight, so the workers
+        // are killed rather than left warm. A worker that is merely idle is not
+        // "used", but a resident 1.16B-parameter model is exactly what the
+        // user is trying to get rid of when they do not want to download and
+        // run these models locally.
+        if (c.enable_helpers) {
+          await awaitProbeHelpers(opts.db);
+        } else {
+          await stopHelperWorkers();
+        }
+        sendJson(res, 200, configPayload(opts.db));
       } catch (err) {
         const code = (err as { code?: string }).code ?? "router_invalid_request";
         sendError(res, dialect, statusForCode(code), code, (err as Error).message);

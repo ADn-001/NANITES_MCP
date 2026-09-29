@@ -16,6 +16,9 @@ import type { DatabaseSync } from "node:sqlite";
 import { readConfig } from "../auth.js";
 import { NeedleHelper } from "./needle.js";
 import { LayaHelper } from "./laya.js";
+import {
+  HELPER_FEATURES, HELPER_FEATURE_NAMES, featureEnabled, featureColumn, readHelperFlags, type HelperFeature,
+} from "./features.js";
 import type { HelperModel } from "./interface.js";
 import type { IRContentPart, IRRequest, IRResponse } from "../ir/types.js";
 import type { Modality } from "../ir/types.js";
@@ -70,10 +73,9 @@ let needleInstance: NeedleHelper | null = null;
 let layaInstance: LayaHelper | null = null;
 
 /** Construct (once) or return the existing helper. Gated on `enable_helpers`. */
-function helpers(db: DatabaseSync): { needle: NeedleHelper; laya: LayaHelper } {
+function helpers(_db?: DatabaseSync): { needle: NeedleHelper; laya: LayaHelper } {
   if (!needleInstance) needleInstance = new NeedleHelper();
   if (!layaInstance) layaInstance = new LayaHelper();
-  void db;
   return { needle: needleInstance, laya: layaInstance };
 }
 
@@ -90,6 +92,24 @@ export function helperStatus(db: DatabaseSync): HelperStatus {
     needle: { available: needle.available(), reason: needle.available() ? "" : needle.why() },
     laya: { available: laya.available(), reason: laya.available() ? "" : laya.why() },
   };
+}
+
+/** Per-feature flag state, for GET /v1/config. */
+/** The flat `{feature: bool}` view, for GET /v1/config. */
+export function helperFeatureFlags(db: DatabaseSync): Record<string, boolean> {
+  const out: Record<string, boolean> = {};
+  for (const name of HELPER_FEATURE_NAMES) out[name] = featureEnabled(db, name);
+  return out;
+}
+
+/** Why a feature is unavailable right now, or "" when it is ready. */
+export function featureReason(db: DatabaseSync, feature: HelperFeature): string {
+  if (!readConfig(db)?.enable_helpers) return "helpers are disabled";
+  if (!featureEnabled(db, feature)) return "feature is off";
+  const { needle, laya } = helpers(db);
+  const model = HELPER_FEATURES[feature].helper === "needle3" ? needle : laya;
+  if (!model.available()) return model.why() || `${HELPER_FEATURES[feature].helper} is not available`;
+  return "";
 }
 
 /**
@@ -194,8 +214,17 @@ export async function runHelperOp(
     return badRequest("`criteria` must be a non-empty array.");
   }
 
+  // The endpoint's own feature flag, not just the master gate. Otherwise
+  // enabling helpers would silently switch on every feature at once, which is
+  // the bundling the per-feature flags exist to undo.
+  const feature: HelperFeature = entry.op === "classify" || entry.op === "score"
+    ? (entry.helper === "laya" ? "laya_preflight" : "structured_output")
+    : "structured_output";
   if (!readConfig(db)?.enable_helpers) {
     return { ok: false, code: "helper_unavailable", message: "Helpers are disabled. PATCH /v1/config {\"enable_helpers\":true} to enable them." };
+  }
+  if (!featureEnabled(db, feature)) {
+    return { ok: false, code: "helper_unavailable", message: `The "${feature}" feature is off. PATCH /v1/config {\"${featureColumn(feature)}\":true} to enable it.` };
   }
   const { needle, laya } = helpers(db);
   const model = entry.helper === "needle3" ? needle : laya;
@@ -303,5 +332,42 @@ export async function extractStructured<T>(
   return needle.extract<T>(text, schema);
 }
 
-export { NeedleHelper, LayaHelper };
+export { NeedleHelper, LayaHelper, readHelperFlags };
 export type { HelperModel };
+
+/**
+ * Kill both resident workers.
+ *
+ * Called when `enable_helpers` goes false. This is what makes the toggle mean
+ * what a user expects: a worker is not merely idle, it is holding a loaded
+ * model in memory, and someone turning these off is usually doing so because
+ * they do not want the model resident at all. The next enable respawns.
+ */
+export async function stopHelperWorkers(): Promise<void> {
+  const needle = needleInstance;
+  const laya = layaInstance;
+  // The instances stay reachable so a later enable reuses the same objects,
+  // but their cached `ready` is cleared, so the next probe re-establishes the
+  // truth rather than reporting a process that no longer exists.
+  await Promise.all([needle?.stop(), laya?.stop()].filter(Boolean) as Promise<void>[]);
+}
+
+/**
+ * The concrete adapter for a helper model.
+ *
+ * Exposed so a call site that needs a capability beyond the `HelperModel`
+ * interface — `reconstruct` on Needle, `decide` on Laya — can reach the shared
+ * instance rather than constructing its own, which would bypass both the
+ * singleton and the "probe once" cache.
+ *
+ * Gating stays with the caller: this returns the adapter either way, so a
+ * feature that is switched off still gets a clean `{ok:false, reason:"disabled"}`
+ * instead of a type error.
+ */
+export function getNeedle(): NeedleHelper {
+  return helpers().needle;
+}
+
+export function getLaya(): LayaHelper {
+  return helpers().laya;
+}

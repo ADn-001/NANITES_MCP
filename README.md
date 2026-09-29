@@ -228,7 +228,7 @@ shell (or your MCP server's `env` block) before starting.
 
 ## Tool reference
 
-Nanites exposes the real 53-tool surface, grouped by what you would use it for:
+Nanites exposes the real 55-tool surface, grouped by what you would use it for:
 
 **Models and inference** — `list_models`, `get_loaded_model`, `load_model`, `unload_model`,
 `chat`, `download_model`, `get_download_status`, `download_and_wait`, `download_and_test`

@@ -15,6 +15,9 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { AddressInfo } from "node:net";
 import type { ToolDeps } from "../tools/deps.js";
+import { readHelperState, applyHelperToggle } from "../tools/routerHelpers.js";
+import { readConfig } from "../router/auth.js";
+import { ROUTER_PROFILE } from "../router/constants.js";
 import { clientForProfile } from "../tools/deps.js";
 import { runHealthCheck, defaultDiskDir as healthDiskDir, type RecoveryStep } from "../health/checker.js";
 import { isAllowedHostHeader, isAllowedOrigin, newLanToken, tokensMatch, assertOutboundUrl, LAN_TOKEN_HEADER } from "./guards.js";
@@ -1527,6 +1530,12 @@ export function createUiHandler(deps: ToolDeps, bind: UiBind, opts: { diskAvaila
       if (req.method === "POST" && p === "/api/settings/profile/delete") return await handleProfileDelete(deps, req, res);
       if (req.method === "GET" && p === "/api/settings/dashboard") return await handleGetDashboard(deps, bind, res);
       if (req.method === "POST" && p === "/api/settings/dashboard") return await handlePostDashboard(deps, bind, req, res);
+      // The helper toggle, for the Settings panel. Same path as the MCP tool
+      // (`nanites_toggleHelpers`) and the same shared database, so the three
+      // surfaces cannot drift.
+      if (req.method === "GET" && p === "/api/router/config") return handleGetHelperConfig(deps, res);
+      if (req.method === "POST" && p === "/api/router/config") return await handlePostHelperConfig(deps, req, res);
+      if (req.method === "GET" && p === "/api/router/status") return handleGetRouterStatus(deps, res);
       // ---- providers ----
       if (req.method === "GET" && p === "/api/pins") return await handlePins(deps, req, res);
       if (req.method === "POST" && p === "/api/pins") return await handlePins(deps, req, res);
@@ -1634,4 +1643,112 @@ export async function startUiServer(deps: ToolDeps, opts: UiServerOptions = {}):
     lanHosts,
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
+}
+
+/**
+ * GET /api/router/config — the helper feature flags and their evidence.
+ *
+ * A separate path from /api/settings/dashboard because these are ROUTER
+ * settings, not dashboard settings, and the dashboard has no business being
+ * the only way to read them.
+ */
+function handleGetHelperConfig(deps: ToolDeps, res: ServerResponse): void {
+  try {
+    sendJson(res, 200, readHelperState(deps.db));
+  } catch (err) {
+    sendError(res, 500, "internal", err instanceof Error ? err.message : String(err), false);
+  }
+}
+
+/**
+ * POST /api/router/config — flip the master switch or one feature.
+ *
+ * VALIDATED here rather than trusted from the browser: the same whitelist the
+ * MCP tool uses, so a hand-typed field name is rejected instead of silently
+ * writing a column that does nothing.
+ */
+async function handlePostHelperConfig(deps: ToolDeps, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const body = await readJsonBody(req);
+  const parsed = helperConfigSchema.safeParse(body);
+  if (!parsed.success) {
+    return sendError(res, 400, "bad_request", "Body must be { enable?: boolean, features?: Record<string, boolean> }", false);
+  }
+  try {
+    const result = applyHelperToggle(deps.db, {
+      enable: parsed.data.enable,
+      features: parsed.data.features,
+    });
+    sendJson(res, 200, result);
+  } catch (err) {
+    const code = (err as { code?: string }).code ?? "internal";
+    const status = code === "invalid_arguments" ? 400 : 500;
+    sendError(res, status, code, err instanceof Error ? err.message : String(err), false);
+  }
+}
+
+const helperConfigSchema = z.object({
+  enable: z.boolean().optional(),
+  features: z.record(z.string(), z.boolean()).optional(),
+});
+
+/**
+ * GET /api/router/status — the Router tab's whole data source.
+ *
+ * Read from the SHARED DATABASE rather than by calling the router's HTTP API,
+ * so the tab still renders when the router is not running — which is the most
+ * interesting state to look at, and the state a live call would fail on.
+ * `running` is therefore an explicit field: the tab shows configuration and
+ * key inventory offline, and says plainly that the process is down.
+ */
+function handleGetRouterStatus(deps: ToolDeps, res: ServerResponse): void {
+  const cfg = readConfig(deps.db);
+  const keys = (() => {
+    try {
+      const rows = deps.db.prepare(
+        "SELECT provider, COUNT(*) AS n FROM provider_api_keys WHERE profile_name = ? AND is_enabled = 1 GROUP BY provider ORDER BY provider",
+      ).all(ROUTER_PROFILE) as Array<{ provider: string; n: number }>;
+      return rows.map((r) => ({ provider: r.provider, keys: Number(r.n) }));
+    } catch {
+      return [];
+    }
+  })();
+  const models = (() => {
+    try {
+      const rows = deps.db.prepare(
+        "SELECT provider, COUNT(*) AS n FROM provider_models WHERE profile_name = ? AND is_registered = 1 GROUP BY provider ORDER BY provider",
+      ).all(ROUTER_PROFILE) as Array<{ provider: string; n: number }>;
+      return rows.map((r) => ({ provider: r.provider, models: Number(r.n) }));
+    } catch {
+      return [];
+    }
+  })();
+  const count = (sql: string): number => {
+    try {
+      const row = deps.db.prepare(sql).get() as { n?: number } | undefined;
+      return Number(row?.n ?? 0);
+    } catch {
+      return 0;
+    }
+  };
+  sendJson(res, 200, {
+    // False rather than omitted: the tab must not assume the process is up.
+    running: false,
+    configured: Boolean(cfg),
+    port: cfg ? Number(cfg.port) : 4800,
+    bind: cfg ? String(cfg.bind) : "127.0.0.1",
+    key_present: Boolean(cfg?.virtual_key_hash),
+    default_strategy: cfg?.default_strategy ?? null,
+    budget_threshold: cfg ? Number(cfg.budget_threshold) : null,
+    tunnel_enabled: Boolean(cfg?.tunnel_enabled),
+    providers: keys,
+    registered_models: models,
+    advertised: count("SELECT COUNT(*) AS n FROM router_advertised"),
+    aliases: count("SELECT COUNT(*) AS n FROM router_aliases"),
+    jobs: {
+      total: count("SELECT COUNT(*) AS n FROM router_jobs"),
+      running: count("SELECT COUNT(*) AS n FROM router_jobs WHERE status = 'running'"),
+      failed: count("SELECT COUNT(*) AS n FROM router_jobs WHERE status = 'failed'"),
+    },
+    helpers: readHelperState(deps.db),
+  });
 }

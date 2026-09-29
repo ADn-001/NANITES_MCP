@@ -127,10 +127,21 @@ export interface RouterConfigRow {
   sticky_ttl_turns: number;
   enable_model_repair: number;
   enable_helpers: number;
+  /** Per-feature helper flags. Present from migration 26. */
+  feature_tool_repair: number;
+  feature_structured_output: number;
+  feature_laya_preflight: number;
+  feature_laya_postflight: number;
   tunnel_enabled: number;
   tunnel_url: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** A nullable numeric column, defaulting to 0. Never NaN. */
+function num(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
 }
 
 function nullableString(value: unknown): string | null {
@@ -149,6 +160,14 @@ function rowToConfig(row: Record<string, unknown>): RouterConfigRow {
     sticky_ttl_turns: Number(row.sticky_ttl_turns),
     enable_model_repair: Number(row.enable_model_repair),
     enable_helpers: Number(row.enable_helpers),
+    // Number(undefined) is NaN, which is falsy but not 0 — and a NaN in a
+    // flag field serialises to null in JSON, so the dashboard renders "off"
+    // for a feature that is genuinely on. Number(x) || 0 would also swallow a
+    // legitimate 0, so the default is applied explicitly.
+    feature_tool_repair: num(row.feature_tool_repair),
+    feature_structured_output: num(row.feature_structured_output),
+    feature_laya_preflight: num(row.feature_laya_preflight),
+    feature_laya_postflight: num(row.feature_laya_postflight),
     tunnel_enabled: Number(row.tunnel_enabled),
     tunnel_url: nullableString(row.tunnel_url),
     created_at: String(row.created_at),
@@ -190,7 +209,17 @@ export function saveKeyHash(db: DatabaseSync, key: string, salt: string): void {
  * feature flag with a defined off state, so there is no such thing as a
  * partial write to recover from.
  */
-const WRITABLE_FLAGS = ["enable_helpers", "enable_model_repair"] as const;
+const WRITABLE_FLAGS = [
+  "enable_helpers",
+  "enable_model_repair",
+  // Per-feature helper flags. Named as `feature_*` to match the migration's
+  // column names exactly, so a typo is a rejected request rather than a
+  // setting that silently does nothing.
+  "feature_tool_repair",
+  "feature_structured_output",
+  "feature_laya_preflight",
+  "feature_laya_postflight",
+] as const;
 
 export type WritableFlag = (typeof WRITABLE_FLAGS)[number];
 

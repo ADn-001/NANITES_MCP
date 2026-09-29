@@ -49,6 +49,10 @@ export const COMMAND_SHEETS: CommandSheet[] = [
   { command: "nanites-seed-agents", prompt: "nanites-seed-agents", argumentHint: "" },
   { command: "nanites-pin", prompt: "nanites-pin", argumentHint: "[list|set|delete] [role] [provider] [model_id]" },
   { command: "nanites-vision", prompt: "nanites-vision", argumentHint: "[on|off]" },
+  // Sheet-only: this one drives the `nanites_toggleHelpers` TOOL rather than a
+  // registered prompt, because toggling a feature is a state change and not a
+  // report the orchestrator renders.
+  { command: "nanites-helpers", prompt: null, argumentHint: "[on|off|<feature> on|<feature> off]" },
 ];
 
 /** Registered prompts with no companion sheet (bare script-chains the

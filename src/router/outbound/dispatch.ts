@@ -25,8 +25,11 @@ import { ROUTER_PROFILE } from "../constants.js";
 import { readConfig } from "../auth.js";
 import { RouterKeyStore } from "../keys/store.js";
 import type { KeyStrategy } from "../keys/selector.js";
-import { contentToParts, type IRContentPart, type IRRequest, type IRResponse, type IRStopReason } from "../ir/types.js";
+import { contentToParts, type IRContentPart, type IRRequest, type IRResponse, type IRStopReason, type IRToolCall } from "../ir/types.js";
 import type { RoutableTarget } from "./resolve.js";
+import { repairWithNeedle } from "../helpers/repairRung.js";
+import { repairAndValidate } from "../../helpers/toolCallRepair.js";
+import { featureEnabled } from "../helpers/features.js";
 
 export interface DispatchInput {
   db: DatabaseSync;
@@ -373,7 +376,21 @@ export async function dispatch(input: DispatchInput): Promise<IRResponse> {
   const stickyTtl = readConfig(db)?.sticky_ttl_turns ?? 5;
   routerKeys.setSticky(target.stored_id, target.provider, key.key_id, stickyTtl);
 
-  const hadToolCalls = Boolean(response.tool_calls && response.tool_calls.length > 0);
+  // The Needle repair rung.
+  //
+  // Placed HERE, after the provider has answered and before the caller sees
+  // anything, because that is the only point where fixing a broken call is
+  // cheaper than the alternative. A tool call the deterministic ladder could
+  // not repair is, at this stage, either about to be returned as an error
+  // (the client retries against a paid provider) or about to be executed with
+  // empty arguments (the silent failure this project already has once).
+  //
+  // FAIL-OPEN by construction: if the feature is off, the helper is missing,
+  // Needle abstains, or confidence is low, `response.tool_calls` is returned
+  // exactly as the provider sent it and nothing downstream changes.
+  const toolCalls = await repairToolCallsIfEnabled(db, request, response);
+
+  const hadToolCalls = Boolean(toolCalls && toolCalls.length > 0);
   const content: IRContentPart[] = response.content
     ? [{ type: "text", text: response.content }]
     : [];
@@ -384,7 +401,7 @@ export async function dispatch(input: DispatchInput): Promise<IRResponse> {
     thinking: response.reasoning || response.reasoning_content
       ? [{ type: "thinking", thinking: response.reasoning ?? response.reasoning_content ?? "" }]
       : [],
-    tool_calls: response.tool_calls ?? [],
+    tool_calls: toolCalls ?? response.tool_calls ?? [],
     stop_reason: stopReasonFor(response, hadToolCalls),
     usage: {
       input_tokens: response.usage?.prompt_tokens ?? 0,
@@ -397,4 +414,70 @@ export async function dispatch(input: DispatchInput): Promise<IRResponse> {
       key_id: key.key_id,
     },
   };
+}
+
+/**
+ * The Needle rung, applied to whatever tool calls the provider returned.
+ *
+ * Returns `null` when there is nothing to do, so the caller falls back to the
+ * provider's own `tool_calls` unchanged. Never throws: a helper problem must
+ * not turn a completed provider call into a failed request.
+ */
+async function repairToolCallsIfEnabled(
+  db: DatabaseSync,
+  request: IRRequest,
+  response: ChatResponse,
+): Promise<IRToolCall[] | null> {
+  // Cheapest possible exit first. Most requests declare no tools at all, and
+  // spawning a model for those would be absurd.
+  if (!request.tools || request.tools.length === 0) return null;
+  if (!response.tool_calls || response.tool_calls.length === 0) return null;
+  if (!featureEnabled(db, "tool_repair")) return null;
+
+  const schemas = new Map(request.tools.map((t) => [t.name, t.input_schema]));
+  // The raw text the model emitted. A broken call is broken IN this text, and
+  // it is the only place the intended values can still be recovered from.
+  const raw = JSON.stringify(response.tool_calls);
+
+  const repaired: IRToolCall[] = [];
+  let changed = false;
+  for (const call of response.tool_calls) {
+    const name = call.name;
+    const schema = schemas.get(name);
+    if (!schema) {
+      // A hallucinated tool name. Needle cannot invent a schema for a tool
+      // that does not exist, so this stays unrepaired and the caller sees the
+      // provider's own error rather than a plausible-looking wrong tool.
+      repaired.push({ id: call.id, name, arguments: {} });
+      continue;
+    }
+
+    // The deterministic ladder FIRST. Needle is the rung after it, never
+    // instead of it: a JSON fix costs nothing and is already covered by tests.
+    const det = repairAndValidate(call.arguments, schema);
+    if (det.ok) {
+      repaired.push({ id: call.id, name, arguments: det.args });
+      continue;
+    }
+
+    const model = await repairWithNeedle(db, raw, { name, description: describeTool(request, name), parameters: schema });
+    if (model.ok) {
+      repaired.push({ id: call.id, name, arguments: model.args });
+      changed = true;
+    } else {
+      // Fail-open: the provider's own arguments, however broken. The existing
+      // error path then reports it, which is honest and unchanged.
+      repaired.push({ id: call.id, name, arguments: isPlainObjectArgs(call.arguments) ? call.arguments : {} });
+    }
+  }
+  return changed ? repaired : null;
+}
+
+function isPlainObjectArgs(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/** The declared description, which is what tells Needle what the args MEAN. */
+function describeTool(request: IRRequest, name: string): string {
+  return request.tools?.find((t) => t.name === name)?.description ?? name;
 }

@@ -13,7 +13,16 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-const ASSETS = [["src/router/helpers/needle_bridge.py", "dist/router/helpers/needle_bridge.py"]];
+const ASSETS = [
+  ["src/router/helpers/needle_bridge.py", "dist/router/helpers/needle_bridge.py"],
+  // The workers the adapters actually spawn. Missing from the list is why a
+  // fresh `npm run build` produced adapters whose worker script was absent:
+  // it worked in a dev checkout and failed for anyone who installed the
+  // package, and only for the optional helper, which is the worst time to
+  // find out. The build now fails loudly instead (see the check below).
+  ["src/router/helpers/needle_worker.py", "dist/router/helpers/needle_worker.py"],
+  ["src/router/helpers/laya_worker.py", "dist/router/helpers/laya_worker.py"],
+];
 
 let copied = 0;
 for (const [from, to] of ASSETS) {

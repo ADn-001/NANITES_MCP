@@ -114,14 +114,25 @@ describe("R0.1 — packaging and process", () => {
 });
 
 describe("R0.2 — storage", () => {
-  it("declares migration 25 after 24, in order", () => {
+  it("declares every migration in ascending, gapless order", () => {
     const versions = MIGRATIONS.map((m) => m.version);
     const sorted = [...versions].sort((a, b) => a - b);
     // The v24 lesson: an entry declared out of order is silently never reached.
     expect(versions).toEqual(sorted);
+
+    // The PROPERTY, not a frozen number. This test used to hardcode 25 and
+    // then had to be edited for every migration, which is a change-detector
+    // that pays for itself by being wrong the moment it is missed. What
+    // actually matters is that the sequence starts at 1, never repeats, and
+    // has no gap — a gap means a version number was skipped and a database
+    // created at that version would never receive the migrations after it.
+    expect(versions[0]).toBe(1);
+    expect(new Set(versions).size).toBe(versions.length);
+    for (let i = 1; i < versions.length; i++) {
+      expect(versions[i]).toBe(versions[i - 1] + 1);
+    }
+    // The router tables arrived in v25, which must stay in the sequence.
     expect(versions).toContain(25);
-    expect(versions.indexOf(25)).toBe(versions.indexOf(24) + 1);
-    expect(versions[versions.length - 1]).toBe(25);
   });
 
   it("creates every router table and exactly one config row", () => {
@@ -141,7 +152,9 @@ describe("R0.2 — storage", () => {
     ]);
 
     const version = d.db.prepare("PRAGMA user_version").get() as { user_version: number };
-    expect(Number(version.user_version)).toBe(25);
+    // The applied version tracks the last DECLARED migration, so adding one
+    // does not require editing this assertion.
+    expect(Number(version.user_version)).toBe(MIGRATIONS[MIGRATIONS.length - 1]!.version);
 
     const rows = d.db.prepare("SELECT COUNT(*) AS n FROM router_config").get() as { n: number };
     expect(Number(rows.n)).toBe(1);

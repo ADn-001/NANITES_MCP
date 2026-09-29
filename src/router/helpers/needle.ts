@@ -1,75 +1,69 @@
 /**
  * Needle 3 adapter.
  *
- * Invoked as a SUBPROCESS. `cactus-needle` is a Python package, and embedding a
- * Python runtime in a Node process is a dependency this router does not need;
- * a short-lived `python -c` keeps the failure mode trivial (a missing
- * interpreter means "helper unavailable", nothing else breaks).
+ * Backed by a LONG-LIVED worker process (needle_worker.py), not a per-call
+ * spawn. Measured on this machine: interpreter start is 0.13s but the first
+ * `extract` costs ~1.4s, so a per-request process pays a model load every call.
  *
- * ## What Needle is NOT used for, and why
+ * ## Which operation is used for what, and why
  *
- * The obvious use — repairing a malformed tool call — is exactly what the
- * package will NOT do safely. `Needle(tools=[...]).run(text)` EXECUTES the
- * tool bodies: probing it with a `write_file` tool actually wrote the file.
- * A repair adapter cannot hand it a real `write_file`, and a stub that
- * captures arguments instead of running them is not the interface the package
- * offers. So tool-call repair stays deterministic (R6) and Needle is used for
- * the two things it does without side effects:
+ * `extract()` is grammar-constrained and returns a VALID shape, but it has NO
+ * confidence field (probed: no `confidence`, `score`, or `logprob` attribute) and
+ * costs ~1.9s warm. It cannot be gated on.
  *
- *   - `extract(text, schema)` — grammar-constrained structured output. The
- *     schema is compiled into the decode, so the result parses by
- *     construction rather than by repair afterwards.
- *   - `embed(text)` — a 3072-dim vector for local relevance search.
+ * `complete()` returns `{function_calls, confidence}` in ~0.08-0.9s, never
+ * executes the tools, and its confidence separates cleanly on real data:
+ * 0.25-0.81 for calls it is confident in, 0.06 when it should abstain. So the
+ * REPAIR RUNG is built on complete(), gated on that gap.
  *
- * This is a limitation of the current package interface, not of the model, and
- * it is recorded here so a future integration picks it up deliberately.
+ * ## What is NOT used, and why
+ *
+ * `run()` EXECUTES the tool bodies: probed with a `write_file`, the file was
+ * written. A repair or shim adapter must never execute anything it
+ * reconstructed, so `run()` is unusable here. Repair stays deterministic first
+ * (the R6 ladder), and Needle is the rung after it.
  */
-import { spawn } from "node:child_process";
+import { HelperWorker, workerPath, type WorkerReply } from "./workerClient.js";
+import { multiToolSource, schemaSourceFor, type ToolSpec } from "./schemaSource.js";
 import { UnavailableHelper, type HelperModel } from "./interface.js";
-
-/**
- * The child program lives in a sibling .py FILE rather than an inline string.
- *
- * The schema generator inside it needs real newlines and real triple-quotes;
- * escaping those through a TypeScript template literal is a reliable way to
- * ship a silently broken program — which is exactly what happened, and cost
- * several rounds of debugging a null that turned out to be a mangled
- * annotation.
- */
-const BRIDGE_PATH = new URL("./needle_bridge.py", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
 
 export interface NeedleOptions {
   python?: string;
   timeoutMs?: number;
 }
 
+/** A reconstructed tool call, plus the confidence that produced it. */
+export interface NeedleCall {
+  name: string;
+  arguments: Record<string, unknown>;
+  confidence: number;
+}
+
 export class NeedleHelper implements HelperModel {
   readonly name = "needle3";
-  private readonly python: string;
-  private readonly timeoutMs: number;
+  private readonly worker: HelperWorker;
   private ready: boolean | null = null;
   private reason = "";
 
   constructor(opts: NeedleOptions = {}) {
-    this.python = opts.python ?? (process.platform === "win32" ? "python" : "python3");
-    this.timeoutMs = opts.timeoutMs ?? 20_000;
+    this.worker = new HelperWorker({
+      name: "needle",
+      script: workerPath("./needle_worker.py"),
+      python: opts.python,
+      timeoutMs: opts.timeoutMs ?? 120_000,
+    });
   }
 
   /**
    * Probe once and cache. A helper that cannot load is a PERMANENT condition
-   * for this process, so re-probing on every call would add a subprocess spawn
+   * for this process, so re-probing per call would add a subprocess round-trip
    * to the request path for nothing.
    */
   async probe(): Promise<boolean> {
     if (this.ready !== null) return this.ready;
-    try {
-      const res = await this.invoke({ op: "embed", text: "probe" });
-      this.ready = res.ok;
-      if (!res.ok) this.reason = res.error ?? "unknown error";
-    } catch (err) {
-      this.ready = false;
-      this.reason = err instanceof Error ? err.message : String(err);
-    }
+    const res = await this.worker.send({ op: "ping" });
+    this.ready = res.ok === true;
+    if (!res.ok) this.reason = res.error ?? "unknown error";
     return this.ready;
   }
 
@@ -81,60 +75,86 @@ export class NeedleHelper implements HelperModel {
     return this.reason;
   }
 
-  private invoke(payload: Record<string, unknown>): Promise<{ ok: boolean; vector?: number[]; value?: unknown; error?: string }> {
-    return new Promise((resolve) => {
-      let child;
-      try {
-        child = spawn(this.python, [BRIDGE_PATH], { stdio: ["pipe", "pipe", "pipe"] });
-      } catch (err) {
-        resolve({ ok: false, error: err instanceof Error ? err.message : String(err) });
-        return;
-      }
-      let out = "";
-      let errOut = "";
-      const timer = setTimeout(() => child.kill(), this.timeoutMs);
-      child.stdout?.on("data", (d: Buffer) => { out += d.toString(); });
-      child.stderr?.on("data", (d: Buffer) => { errOut += d.toString(); });
-      child.on("error", (err: Error) => {
-        clearTimeout(timer);
-        resolve({ ok: false, error: err.message });
-      });
-      child.on("close", (code: number | null) => {
-        clearTimeout(timer);
-        const last = out.trim().split("\n").filter(Boolean).pop();
-        if (last) {
-          try {
-            resolve(JSON.parse(last) as never);
-            return;
-          } catch { /* fall through to the error path */ }
-        }
-        resolve({ ok: false, error: errOut.trim().slice(0, 200) || `exited ${code}` });
-      });
-      child.stdin?.write(JSON.stringify(payload));
-      child.stdin?.end();
-    });
+  /** True when a worker process is currently alive. For health output. */
+  resident(): boolean {
+    return this.worker.running();
+  }
+
+  /**
+   * Reconstruct a tool call from mangled text.
+   *
+   * SIDE-EFFECT-FREE BY CONSTRUCTION: the generated tool bodies raise, and the
+   * worker calls complete(), which returns the call without executing it. That
+   * property is what makes the rung safe, and it was verified against a tool
+   * that writes a file if run.
+   *
+   * Returns null when Needle abstains, errors, or is not confident enough, so
+   * the caller falls through to whatever it would have done next. A repair rung
+   * must never be the last word.
+   */
+  async reconstruct(
+    text: string,
+    tool: ToolSpec,
+    minConfidence = 0.25,
+  ): Promise<NeedleCall | null> {
+    if (!(await this.probe())) return null;
+    let source: string;
+    try {
+      source = multiToolSource([tool]);
+    } catch {
+      // A tool with no usable arguments cannot be reconstructed against.
+      return null;
+    }
+
+    const res = await this.worker.send({ op: "complete", tool_source: source, query: text });
+    if (!res.ok) return null;
+
+    const calls = (res["calls"] as Array<{ name: string; arguments: Record<string, unknown> }>) ?? [];
+    if (calls.length === 0) return null; // abstained
+
+    const confidence = Number(res["confidence"] ?? 0);
+    const call = calls[0]!;
+    if (call.name !== tool.name) return null; // picked a different tool: not a repair
+    if (!isPlainObject(call.arguments)) return null;
+    if (confidence < minConfidence) return null;
+
+    return { name: call.name, arguments: call.arguments, confidence };
+  }
+
+  /** Extract structured fields. No confidence is available on this path. */
+  async extractFrom(text: string, schema: Record<string, unknown>): Promise<unknown | null> {
+    if (!(await this.probe())) return null;
+    let source: string;
+    try {
+      source = schemaSourceFor("Record", schema);
+    } catch {
+      return null;
+    }
+    const res = await this.worker.send({ op: "extract", schema_source: source, text });
+    if (!res.ok) return null;
+    const v = res["value"];
+    return v === undefined ? null : v;
+  }
+
+  async extract<T>(text: string, schema: Record<string, unknown>): Promise<T | null> {
+    return (await this.extractFrom(text, schema)) as T | null;
   }
 
   async embed(text: string): Promise<number[] | null> {
     if (!(await this.probe())) return null;
-    const res = await this.invoke({ op: "embed", text });
-    return res.ok && Array.isArray(res.vector) ? res.vector : null;
-  }
-
-  async extract<T>(text: string, schema: Record<string, unknown>): Promise<T | null> {
-    if (!(await this.probe())) return null;
-    const res = await this.invoke({ op: "extract", text, schema });
-    return res.ok ? (res.value as T) : null;
+    const res = await this.worker.send({ op: "embed", text });
+    if (!res.ok || !Array.isArray(res["vector"])) return null;
+    return res["vector"] as number[];
   }
 
   async retrieve(query: string, corpus: string[]): Promise<{ indices: number[] }> {
     if (corpus.length === 0) return { indices: [] };
     const q = await this.embed(query);
     if (!q) return { indices: [] };
-    // Score the corpus locally once the query vector exists: one subprocess
-    // call rather than one per document.
     const docs = await Promise.all(corpus.map((c) => this.embed(c)));
-    const scored = docs.map((d, i) => (d ? { i, s: cosine(q, d) } : null)).filter(Boolean) as Array<{ i: number; s: number }>;
+    const scored = docs
+      .map((d, i) => (d ? { i, s: cosine(q, d) } : null))
+      .filter(Boolean) as Array<{ i: number; s: number }>;
     scored.sort((a, b) => b.s - a.s);
     return { indices: scored.map((x) => x.i) };
   }
@@ -147,13 +167,21 @@ export class NeedleHelper implements HelperModel {
   async score(): Promise<{ score: number | null }> {
     return { score: null };
   }
+
+  /** Shut the worker down. Called on router close and in tests. */
+  async stop(): Promise<void> {
+    await this.worker.stop();
+    this.ready = null;
+  }
+}
+
+export function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
 export function cosine(a: number[], b: number[]): number {
   const n = Math.min(a.length, b.length);
-  let dot = 0;
-  let na = 0;
-  let nb = 0;
+  let dot = 0, na = 0, nb = 0;
   for (let i = 0; i < n; i++) {
     dot += a[i]! * b[i]!;
     na += a[i]! * a[i]!;
@@ -163,13 +191,10 @@ export function cosine(a: number[], b: number[]): number {
   return dot / (Math.sqrt(na) * Math.sqrt(nb));
 }
 
-/** The helper set, degrading to unavailable models rather than failing. */
 export function needleOrUnavailable(opts?: NeedleOptions): HelperModel {
   const helper = new NeedleHelper(opts);
-  // Availability is probed lazily; until then it reports unavailable, which is
-  // the safe default for an opt-in feature.
   void helper.probe().catch(() => undefined);
   return helper;
 }
 
-export { UnavailableHelper };
+export { UnavailableHelper, type WorkerReply };

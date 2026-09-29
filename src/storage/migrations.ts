@@ -591,6 +591,26 @@ export const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    // Per-feature helper flags.
+    //
+    // One column per feature rather than a JSON blob, so `PATCH /v1/config`
+    // can validate a key against a real whitelist and so a typo is a rejected
+    // request rather than a silently-created setting. `enable_helpers` stays
+    // as the MASTER gate: the user-facing promise is that turning helpers off
+    // stops them being used in flight, and that promise must not depend on
+    // which flags happen to be set.
+    //
+    // Every feature defaults to 0. A feature is opt-in per operator, and the
+    // two measured-strong features still default off because a local model
+    // dependency is not something to enable on someone's behalf.
+    version: 26,
+    // Applied by the idempotent branch in applyMigrations, not by exec'ing
+    // this: SQLite has no `ADD COLUMN IF NOT EXISTS`, so a bare ALTER chain
+    // would throw on any database that already has the column. This block is
+    // the canonical list; the branch above reads the same names.
+    sql: "",
+  },
 ];
 
 export function applyMigrations(db: DatabaseSync): void {
@@ -628,6 +648,24 @@ export function applyMigrations(db: DatabaseSync): void {
         const cols = db.prepare("PRAGMA table_info(provider_models)").all() as Array<{ name: string }>;
         if (!cols.some((c) => c.name === "nickname")) {
           db.exec("ALTER TABLE provider_models ADD COLUMN nickname TEXT");
+        }
+      } else if (migration.version === 26) {
+        // Idempotent per column, following the same pattern as 14/15/16. The
+        // migration's own `sql` is a bare ALTER chain because SQLite has no
+        // `ADD COLUMN IF NOT EXISTS`; running it twice would throw, and a
+        // half-applied chain would leave the table missing the later flags.
+        const cols = db.prepare("PRAGMA table_info(router_config)").all() as Array<{ name: string }>;
+        const have = new Set(cols.map((c) => c.name));
+        const defs: Array<[string, string]> = [
+          ["feature_tool_repair", "INTEGER NOT NULL DEFAULT 0"],
+          ["feature_structured_output", "INTEGER NOT NULL DEFAULT 0"],
+          ["feature_laya_preflight", "INTEGER NOT NULL DEFAULT 0"],
+          ["feature_laya_postflight", "INTEGER NOT NULL DEFAULT 0"],
+        ];
+        for (const [name, decl] of defs) {
+          if (!have.has(name)) {
+            db.exec(`ALTER TABLE router_config ADD COLUMN ${name} ${decl}`);
+          }
         }
       } else if (migration.version === 17) {
         // Idempotent: add the nullable provider column to model_registry if missing.
