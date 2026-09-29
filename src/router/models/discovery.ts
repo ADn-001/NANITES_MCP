@@ -22,6 +22,7 @@ import { ProviderModelStore } from "../../storage/providerModelStore.js";
 import { NanitesError } from "../../helpers/errors.js";
 import type { ProviderKind } from "../../storage/profileDefaults.js";
 import { ROUTER_PROFILE } from "../constants.js";
+import { applyCfCapabilities } from "../providers/cloudflare/capabilities.js";
 
 export interface DiscoveryResult {
   provider: string;
@@ -83,7 +84,21 @@ export async function discoverAndRefresh(db: DatabaseSync, provider: ProviderKin
     // The full set, untruncated. `upsertModels` is a batch upsert with
     // COALESCE on pricing, so a priceless discovery cannot erase a
     // manifest-seeded rate.
-    new ProviderModelStore(db).upsertModels(ROUTER_PROFILE, provider, models);
+    const store = new ProviderModelStore(db);
+    store.upsertModels(ROUTER_PROFILE, provider, models);
+
+    // For Cloudflare, the published catalog carries no usable capability data
+    // for the non-text models, so the REGISTRY supplies it. This is what fills
+    // the audio/image capability columns that R5a needs and that nothing else
+    // populates.
+    //
+    // Written as a separate pass rather than folded into upsertModels, because
+    // a model Cloudflare no longer offers must NOT keep its flags: the
+    // registry is a seed, discovery decides what exists.
+    if (provider === "cloudflare") {
+      applyCfCapabilities(db);
+    }
+
     return { provider, discovered: models.length, ok: true };
   } catch (err) {
     return {
