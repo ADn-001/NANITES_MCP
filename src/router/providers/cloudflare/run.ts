@@ -19,6 +19,25 @@ import { findCfModel, type CfModelDef } from "./catalog.js";
 import type { IRRequest } from "../../ir/types.js";
 import { partsToText } from "../../ir/types.js";
 
+/**
+ * Sniff an image's real type from its magic bytes.
+ *
+ * PROBED: flux-1-schnell returns JPEG (`ÿØÿ` JFIF) while the base64
+ * blob arrives with no declared type at all — there is no Content-Type to read
+ * and no filename. Hardcoding image/png produced a 300KB "PNG" that no decoder
+ * would open, so the type is detected rather than assumed.
+ */
+export function sniffImageMime(bytes: Uint8Array): string {
+  const at = (i: number): number => bytes[i] ?? -1;
+  if (bytes.length >= 3 && at(0) === 0xff && at(1) === 0xd8 && at(2) === 0xff) return "image/jpeg";
+  if (bytes.length >= 8 && at(0) === 0x89 && at(1) === 0x50 && at(2) === 0x4e && at(3) === 0x47) return "image/png";
+  if (bytes.length >= 12 && at(0) === 0x52 && at(1) === 0x49 && at(2) === 0x46 && at(3) === 0x46) {
+    if (at(8) === 0x57 && at(9) === 0x45 && at(10) === 0x42 && at(11) === 0x50) return "image/webp";
+  }
+  if (bytes.length >= 2 && at(0) === 0x42 && at(1) === 0x4d) return "image/bmp";
+  return "application/octet-stream";
+}
+
 export interface CfArtifact {
   kind: "image" | "audio";
   /** Base64, without a data-URI prefix. */
@@ -181,9 +200,10 @@ export async function decodeRunResponse(res: Response, model: CfModelDef, latenc
       // caller a JSON blob where an image belongs.
       const image = obj["image"];
       if (typeof image === "string" && image.length > 0) {
+        const bytes = fromBase64(image);
         return {
           text: null,
-          artifact: { kind: "image", b64: image, mime: "image/png", bytes: fromBase64(image).byteLength },
+          artifact: { kind: "image", b64: image, mime: sniffImageMime(bytes), bytes: bytes.byteLength },
           finish_reason: "stop",
           latency_ms: latencyMs,
         };

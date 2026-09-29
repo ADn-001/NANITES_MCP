@@ -26,6 +26,7 @@ import { createSseWriter } from "./stream/sse.js";
 import { createAnthropicStream, type AnthropicStreamEncoder } from "./stream/anthropicStream.js";
 import { createOpenAiStream, type OpenAiStreamEncoder } from "./stream/openaiStream.js";
 import { openUpstreamStream, type OpenedUpstream } from "./outbound/streamDispatch.js";
+import { needsRunPath, dispatchCfRun, toIRResponse } from "./outbound/cloudflareRun.js";
 import type { IRRequest } from "./ir/types.js";
 import { countTokens } from "../helpers/tokenize.js";
 import { partsToText } from "./ir/types.js";
@@ -207,6 +208,7 @@ function statusForCode(code: string): number {
       return 404;
     case "provider_rate_limited":
       return 429;
+    case "provider_quota_exhausted":
     case "provider_insufficient_credits":
     case "all_keys_exhausted":
     case "provider_key_required":
@@ -302,6 +304,36 @@ async function handleInference(
   }
 
   const target = resolveTarget(opts.db, request.model);
+
+  // A Cloudflare model outside the chat-completions shim goes to /ai/run,
+  // which serves image, TTS, ASR, and the VQA models. Text-generation models
+  // deliberately do NOT come here — the existing OpenAI-compatible path
+  // already handles them, and the chat shim is the better-tested one.
+  if (target.provider === "cloudflare" && needsRunPath(target.model_id)) {
+    try {
+      const run = await dispatchCfRun({ db: opts.db, target, request });
+      const ir = toIRResponse(run, request);
+      // A modality reply is not a chat completion. The OpenAI image shape is
+      // what a client expects for a generation request, so an artifact is
+      // rendered as `data[0].b64_json` rather than as message content.
+      if (run.artifact) {
+        sendJson(res, 200, {
+          created: Math.floor(Date.now() / 1000),
+          model: request.model,
+          data: [{ b64_json: run.artifact.b64, mime_type: run.artifact.mime }],
+        });
+        return;
+      }
+      const payload = anthropicPath
+        ? encodeAnthropicResponse(ir, `msg_${randomUUID()}`)
+        : encodeOpenAiResponse(ir, `chatcmpl_${randomUUID()}`, Math.floor(Date.now() / 1000));
+      sendJson(res, 200, payload);
+    } catch (err) {
+      const code = (err as { code?: string }).code ?? "unexpected_error";
+      sendError(res, dialect, statusForCode(code), code, (err as Error).message);
+    }
+    return;
+  }
 
   if (request.stream) {
     await handleStreaming(req, res, opts, anthropicPath, target, request);
