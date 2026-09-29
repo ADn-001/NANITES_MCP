@@ -97,10 +97,12 @@ describe("routing decision", () => {
     }
   });
 
-  it("sends an UNKNOWN model to the shim rather than guessing", () => {
-    // No verified body means no /ai/run. A model outside the registry is
-    // treated as text and either works on the shim or fails cleanly there.
-    expect(needsRunPath("@cf/some/model-we-never-registered")).toBe(false);
+  it("sends an UNKNOWN model to the explicit refusal, not the shim", () => {
+    // The registry has no request shape for it, so routing it to /ai/run
+    // yields `modality_unsupported` naming the model — an actionable error
+    // that costs no request. The chat shim would return an opaque 500 from
+    // Workers AI instead.
+    expect(needsRunPath("@cf/some/model-we-never-registered")).toBe(true);
   });
 });
 
@@ -190,18 +192,22 @@ describe("over HTTP", () => {
     expect(body.choices[0]!.message.content).toBe("OK");
   });
 
-  it("refuses an UNVERIFIED model with an explanation, before any request", async () => {
-    const h = await harness(["@cf/deepgram/nova-3"]);
+  it("refuses a model with NO registered request shape, without contacting Cloudflare", async () => {
+    // A Cloudflare model outside the registry has no verified body, so the
+    // router must refuse rather than guess one. Guessing produces a
+    // confident-looking 400 that costs a round trip and tells the operator
+    // nothing useful.
+    const h = await harness(["@cf/not-in-the-registry/some-model"]);
     stubCloudflare(h.seen, () => new Response("{}", { headers: { "content-type": "application/json" } }));
 
     const res = await h.post({
-      model: "cloudflare:@cf/deepgram/nova-3",
-      messages: [{ role: "user", content: [{ type: "input_audio", input_audio: { data: "QUJD", format: "wav" } }] }],
+      model: "cloudflare:@cf/not-in-the-registry/some-model",
+      messages: [{ role: "user", content: "hello" }],
     });
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: { code: string; message: string } };
     expect(body.error.code).toBe("modality_unsupported");
-    expect(body.error.message).toMatch(/no confirmed request shape/i);
+    expect(body.error.message).toMatch(/no verified workers ai request shape/i);
     // Refused WITHOUT contacting Workers AI, so it costs nothing.
     expect(h.seen).toHaveLength(0);
   });

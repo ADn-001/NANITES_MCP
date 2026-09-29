@@ -11,7 +11,6 @@
  *   text-to-image        { prompt, width, ... }          -> binary PNG
  *   image-to-image       { prompt, image_b64, strength } -> binary PNG
  *   text-to-speech       MeloTTS { prompt, lang } / Aura { text, speaker } -> MP3
- *   speech-recognition   { audio: number[], language? }  -> { result: "text" }
  *
  * Note the TTS split: MeloTTS takes `prompt`+`lang`, Deepgram Aura takes
  * `text`+`speaker`+`encoding`. Sending either shape to the other is a 400.
@@ -27,8 +26,7 @@ export type CfCategory =
   | "image-to-text"
   | "text-to-image"
   | "image-to-image"
-  | "text-to-speech"
-  | "speech-recognition";
+  | "text-to-speech";
 
 export interface CfModelDef {
   id: string;
@@ -51,9 +49,11 @@ export interface CfModelDef {
   /**
    * Set when the request shape could NOT be confirmed against the live API.
    *
-   * A planner must not offer an unverified model for a modality: guessing a
-   * body shape produces a confident-looking 400 at request time instead of an
-   * honest "unsupported here".
+   * A planner must not offer an unverified model: guessing a body shape
+   * produces a confident-looking 400 at request time instead of an honest
+   * "unsupported here". Speech recognition is OUT OF SCOPE and removed from
+   * this registry; the field stays because a future model can need the same
+   * treatment.
    */
   unverified?: boolean;
   acceptsImage: boolean;
@@ -115,8 +115,6 @@ export const CF_MODELS: CfModelDef[] = [
   { id: "@cf/deepgram/aura-1", category: "text-to-speech", format: "json", acceptsImage: false, acceptsText: true, acceptsAudio: false, returnsImage: false, returnsAudio: true, returnsText: false, deprecated: false, description: "Deepgram Aura TTS" },
   { id: "@cf/deepgram/aura-2-en", category: "text-to-speech", format: "json", acceptsImage: false, acceptsText: true, acceptsAudio: false, returnsImage: false, returnsAudio: true, returnsText: false, deprecated: false, description: "Deepgram Aura-2 English" },
   { id: "@cf/deepgram/aura-2-es", category: "text-to-speech", format: "json", acceptsImage: false, acceptsText: true, acceptsAudio: false, returnsImage: false, returnsAudio: true, returnsText: false, deprecated: false, description: "Deepgram Aura-2 Spanish" },
-  { id: "@cf/deepgram/nova-3", category: "speech-recognition", format: "json", unverified: true, acceptsImage: false, acceptsText: false, acceptsAudio: true, returnsImage: false, returnsAudio: false, returnsText: true, deprecated: false, description: "Deepgram Nova-3 STT" },
-  { id: "@cf/deepgram/flux", category: "speech-recognition", format: "json", unverified: true, acceptsImage: false, acceptsText: false, acceptsAudio: true, returnsImage: false, returnsAudio: false, returnsText: true, deprecated: false, description: "Deepgram Flux conversational STT" },
 ];
 
 const BY_ID = new Map(CF_MODELS.map((m) => [m.id, m]));

@@ -72,7 +72,7 @@ export function fromBase64(value: string): Uint8Array {
  *  - LLaVA and Moondream take `prompt`, not `messages`.
  *  - MeloTTS takes `prompt`+`lang`; Deepgram Aura takes `text`+`speaker`.
  */
-export function buildRunBody(model: CfModelDef, request: IRRequest, audioB64?: string): Record<string, unknown> {
+export function buildRunBody(model: CfModelDef, request: IRRequest): Record<string, unknown> {
   const body: Record<string, unknown> = {};
   const text = partsToText(request.messages[request.messages.length - 1]?.content ?? "");
 
@@ -117,11 +117,6 @@ export function buildRunBody(model: CfModelDef, request: IRRequest, audioB64?: s
       }
       const voice = (request as { speaker?: string }).speaker;
       if (voice) body["speaker"] = voice;
-      return body;
-    }
-
-    case "speech-recognition": {
-      if (audioB64) body["audio"] = Array.from(fromBase64(audioB64));
       return body;
     }
 

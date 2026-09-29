@@ -57,17 +57,15 @@ describe("registry", () => {
       expect(m.returnsText || m.returnsImage || m.returnsAudio, where).toBe(true);
       // A model that accepts nothing cannot be prompted.
       expect(m.acceptsText || m.acceptsImage || m.acceptsAudio, where).toBe(true);
-      // Every model here takes TEXT in some form — even the audio-only ASR
-      // models are prompted with a text instruction. "acceptsText: false"
-      // everywhere is the late-binding generator bug, so assert the shape
-      // rather than trusting any single entry.
+      // Every model here takes text. With speech recognition out of scope,
+      // "acceptsText: false" anywhere is the late-binding generator bug, so
+      // assert the shape rather than trusting any single entry.
       const noText = CF_MODELS.filter((x) => !x.acceptsText).map((x) => x.id);
-      // ASR and VAD are the only categories that legitimately take no text.
-      expect(noText.every((id) => findCfModel(id)!.category === "speech-recognition")).toBe(true);
-      // A text-to-image model does NOT accept audio. Nothing in the catalog
-      // takes audio AND emits audio.
+      expect(noText).toEqual([]);
+      // Nothing in the catalog accepts AUDIO input now that ASR is gone, and
+      // nothing both takes and emits audio.
       for (const x of CF_MODELS) {
-        expect(x.acceptsAudio, where).toBe(x.category === "speech-recognition");
+        expect(x.acceptsAudio, where).toBe(false);
       }
       // Category must agree with the return flags, or the request shaping and
       // the capability columns would disagree about what the model does.
@@ -82,7 +80,6 @@ describe("registry", () => {
           expect(m.returnsImage && m.acceptsImage, where).toBe(true);
           break;
         case "image-to-text":
-        case "speech-recognition":
         case "text-generation":
           expect(m.returnsText, where).toBe(true);
           break;
@@ -101,12 +98,16 @@ describe("registry", () => {
     expect(deprecated).toBeLessThan(CF_MODELS.length / 2);
   });
 
-  it("covers the six in-scope categories", () => {
+  it("covers the five in-scope categories", () => {
     const cats = new Set(CF_MODELS.map((m) => m.category));
     expect([...cats].sort()).toEqual([
-      "image-to-image", "image-to-text", "speech-recognition",
+      "image-to-image", "image-to-text",
       "text-generation", "text-to-image", "text-to-speech",
     ]);
+    // Speech recognition is out of scope and must not creep back in: its
+    // request shape was never confirmed against the live API.
+    expect([...cats]).not.toContain("speech-recognition");
+    expect(CF_MODELS.some((m) => m.category === "speech-recognition")).toBe(false);
   });
 
   it("finds models by their full @cf/ id", () => {
@@ -124,9 +125,9 @@ describe("registry", () => {
     expect(cfInputModalities(llava).sort()).toEqual(["image", "text"]);
     expect(cfOutputModalities(llava)).toEqual(["text"]);
 
-    const nova = findCfModel("@cf/deepgram/nova-3")!;
-    expect(cfInputModalities(nova)).toEqual(["audio"]);
-    expect(cfOutputModalities(nova)).toEqual(["text"]);
+    const melo = findCfModel("@cf/myshell-ai/melotts")!;
+    expect(cfInputModalities(melo)).toEqual(["text"]);
+    expect(cfOutputModalities(melo)).toEqual(["audio"]);
   });
 
   it("builds the /ai/run URL with the model id as a path segment", () => {
@@ -195,22 +196,6 @@ describe("request shaping per category", () => {
     const auraBody = buildRunBody(aura, req());
     expect(auraBody["text"]).toBe("hello");
     expect(auraBody["prompt"]).toBeUndefined();
-  });
-
-  it("marks ASR as UNVERIFIED, because the documented shape was rejected", () => {
-    // PROBED 2026-09-29: nova-3 documents { audio: number[] }. It rejected
-    // that, and then rejected { audio: { body, contentType } } while its own
-    // error demanded exactly that shape. The request body could not be
-    // confirmed, so the model is flagged and the planner skips it rather than
-    // offering a modality that 400s on use.
-    const nova = findCfModel("@cf/deepgram/nova-3")!;
-    expect(nova.unverified).toBe(true);
-  });
-
-  it("speech-recognition sends audio as a raw byte array", () => {
-    const model = findCfModel("@cf/deepgram/nova-3")!;
-    const body = buildRunBody(model, req(), "QUJD");
-    expect((body["audio"] as number[])).toEqual([65, 66, 67]);
   });
 
   it("text-generation sends the OpenAI-shaped messages", () => {
@@ -336,14 +321,10 @@ describe("capability population", () => {
     opened.push({ close });
 
     const store = new ProviderModelStore(db);
-    // Discovery "found" these three.
+    // Discovery "found" these two.
     store.registerModel(ROUTER_PROFILE, "cloudflare", "@cf/black-forest-labs/flux-1-schnell");
     store.registerModel(ROUTER_PROFILE, "cloudflare", "@cf/llava-hf/llava-1.5-7b-hf");
-    store.registerModel(ROUTER_PROFILE, "cloudflare", "@cf/deepgram/nova-3");
 
-    // Two of the three get capabilities; nova-3 is UNVERIFIED (its documented
-    // body shape was rejected by the live API) so it is skipped rather than
-    // offered a modality that 400s on use.
     expect(applyCfCapabilities(db)).toBe(2);
 
     const flux = store.getModel(ROUTER_PROFILE, "cloudflare", "@cf/black-forest-labs/flux-1-schnell")!;
@@ -355,10 +336,6 @@ describe("capability population", () => {
     expect(llava.supported_modalities).toEqual(["text"]);
     // The vision INPUT capability: nothing else populates this column.
     expect(llava.capabilities.vision).toBe(true);
-
-    // The unverified model keeps only what discovery gave it.
-    const nova = store.getModel(ROUTER_PROFILE, "cloudflare", "@cf/deepgram/nova-3")!;
-    expect(nova.supported_modalities).toEqual(["text"]);
 
     // A registry model that discovery did NOT find gets no row at all.
     expect(store.getModel(ROUTER_PROFILE, "cloudflare", "@cf/moonshot/kimi-k2.6")).toBeNull();

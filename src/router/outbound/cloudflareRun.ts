@@ -25,10 +25,18 @@ import { buildRunBody, decodeRunResponse, runUrl, type CfArtifact } from "../pro
 import type { IRRequest, IRResponse } from "../ir/types.js";
 import type { ResolvedTarget } from "./resolve.js";
 
-/** True when this model must go through /ai/run rather than the chat shim. */
+/**
+ * True when this model must go through /ai/run rather than the chat shim.
+ *
+ * An UNKNOWN model returns TRUE, not false. Sending it to the chat shim
+ * produces an opaque 500 from Workers AI; routing it here produces a
+ * `modality_unsupported` error that names the model and says the registry has
+ * no shape for it — which is actionable, and costs nothing because the refusal
+ * happens before any request.
+ */
 export function needsRunPath(modelId: string): boolean {
   const def = findCfModel(modelId);
-  if (!def) return false;
+  if (!def) return true;
   // text-generation is the only category the OpenAI-compatible shim serves.
   return def.category !== "text-generation";
 }
@@ -104,8 +112,7 @@ export async function dispatchCfRun(input: CfDispatchInput): Promise<CfDispatchR
   }
 
   const base = key.gateway_url ?? "https://api.cloudflare.com/client/v4";
-  const audio = extractAudio(request);
-  const body = buildRunBody(model, request, audio);
+  const body = buildRunBody(model, request);
 
   const started = Date.now();
   let res: Response;
@@ -182,17 +189,6 @@ async function classifyRunError(status: number, raw: string, model: CfModelDef):
     retryable: false,
     details: { model_id: model.id, category: model.category, status },
   });
-}
-
-/** The first base64 audio part in the request, if any. */
-function extractAudio(request: IRRequest): string | undefined {
-  for (const m of request.messages) {
-    if (typeof m.content === "string") continue;
-    for (const p of m.content) {
-      if (p.type === "input_audio") return p.data;
-    }
-  }
-  return undefined;
 }
 
 /** Shape a run result into the IR, so callers share one response type. */
