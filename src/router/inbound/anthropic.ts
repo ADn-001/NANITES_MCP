@@ -249,6 +249,9 @@ export function decodeAnthropicRequest(body: unknown): IRRequest {
   if (temperature !== undefined) request.temperature = temperature;
   const topP = optionalNumber(root["top_p"], "top_p");
   if (topP !== undefined) request.top_p = topP;
+  const timeoutMs = optionalNumber(root["timeout_ms"], "timeout_ms");
+  if (timeoutMs !== undefined) (request as { timeout_ms?: number }).timeout_ms = timeoutMs;
+
   if (Array.isArray(root["stop_sequences"])) {
     request.stop = asArray(root["stop_sequences"], "stop_sequences").map((s, i) => asString(s, `stop_sequences[${i}]`));
   }

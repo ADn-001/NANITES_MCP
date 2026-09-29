@@ -46,6 +46,18 @@ export interface CfDispatchInput {
   target: ResolvedTarget;
   request: IRRequest;
   key_id?: string;
+  /**
+   * Caller-declared budget, in ms. A generation model that takes a minute is
+   * not a hang, so a caller who knows they are asking for one can raise the
+   * router's ceiling above the default.
+   */
+  timeout_ms?: number;
+  /**
+   * Aborted when the client hangs up. A generation can run for 70 seconds
+   * (measured, SDXL Base), so without this a client that disconnects early
+   * still costs the full render.
+   */
+  signal?: AbortSignal;
 }
 
 export interface CfDispatchResult {
@@ -115,20 +127,53 @@ export async function dispatchCfRun(input: CfDispatchInput): Promise<CfDispatchR
   const body = buildRunBody(model, request);
 
   const started = Date.now();
+  const budgetMs = resolveTimeout(request, input.timeout_ms);
+
+  // The caller's budget and the client's patience race each other. Whichever
+  // fires first ends the request, and neither is a provider fault.
+  const budget = AbortSignal.timeout(budgetMs);
+  const composite = input.signal
+    ? AbortSignal.any([budget, input.signal])
+    : budget;
+
   let res: Response;
   try {
     res = await fetch(runUrl(base, key.account_id, model.id), {
       method: "POST",
       headers: { Authorization: `Bearer ${key.api_key}`, "Content-Type": "application/json" },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(240_000),
+      signal: composite,
     });
   } catch (err) {
-    // mapFetchError strips the URL, which carries the account id.
-    const message = err instanceof Error ? err.message : String(err);
+    // A client that hung up is not an error to report to anyone — it is the
+    // request being cancelled, and the caller is already gone.
+    if (input.signal?.aborted) {
+      throw new NanitesError({
+        code: "request_cancelled",
+        message: "The client disconnected before the generation finished.",
+        retryable: false,
+        details: { model_id: model.id },
+      });
+    }
+    const isTimeout = err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError");
+    if (isTimeout) {
+      // A timeout on a generation model is usually a SLOW model, not a broken
+      // one, so the message says so and says what to do. A caller who hits
+      // this on a 20-step SDXL render should raise the budget, not retry
+      // blindly against a model that is working.
+      throw new NanitesError({
+        code: "provider_timeout",
+        message: `${model.id} did not answer within ${Math.round(budgetMs / 1000)}s. ` +
+          `This model is slow rather than unavailable — retry with a higher ` +
+          `"timeout_ms" if the request is a large render.`,
+        retryable: true,
+        details: { model_id: model.id, category: model.category, timeout_ms: budgetMs },
+      });
+    }
+    // The URL carries the account id, so it must not appear in the message.
     throw new NanitesError({
       code: "provider_network_error",
-      message: `Could not reach Workers AI: ${message}`,
+      message: `Could not reach Workers AI: ${err instanceof Error ? err.message : String(err)}`,
       retryable: true,
     });
   }
@@ -146,6 +191,29 @@ export async function dispatchCfRun(input: CfDispatchInput): Promise<CfDispatchR
     served_by: { provider: target.provider, model_id: target.model_id, key_id: key.key_id },
     latency_ms: decoded.latency_ms,
   };
+}
+
+/** The default ceiling. Generous enough for the slowest model measured live. */
+export const DEFAULT_GENERATION_TIMEOUT_MS = 240_000;
+
+/** A caller may not raise the ceiling arbitrarily; this is the ceiling. */
+export const MAX_GENERATION_TIMEOUT_MS = 600_000;
+
+/**
+ * Resolve the effective timeout.
+ *
+ * PROBED 2026-09-29 across 3 runs per model: FLUX 1.4s, Aura 0.6s,
+ * MeloTTS 5.8s, and SDXL Base at 20 steps / 1024x1024 averaged 69.6s with an
+ * 83.4s max. Only SDXL is slow, and it fits the default with headroom, so
+ * there is no need for a job queue here. A caller who wants a bigger ceiling
+ * asks for one explicitly rather than having every request wait on it.
+ */
+export function resolveTimeout(request: IRRequest, requested?: number): number {
+  const declared = requested ?? (request as { timeout_ms?: number }).timeout_ms;
+  if (declared === undefined || !Number.isFinite(declared) || declared <= 0) {
+    return DEFAULT_GENERATION_TIMEOUT_MS;
+  }
+  return Math.min(Math.round(declared), MAX_GENERATION_TIMEOUT_MS);
 }
 
 /** Map a Workers AI failure onto the existing provider error taxonomy. */

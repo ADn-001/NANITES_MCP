@@ -215,6 +215,11 @@ export function decodeOpenAiRequest(body: unknown): IRRequest {
   const topP = optionalNumber(root["top_p"], "top_p");
   if (topP !== undefined) request.top_p = topP;
 
+  // A caller-declared generation budget. Non-standard on both dialects, so it
+  // is opt-in and simply ignored by a client that does not know about it.
+  const timeoutMs = optionalNumber(root["timeout_ms"], "timeout_ms");
+  if (timeoutMs !== undefined) (request as { timeout_ms?: number }).timeout_ms = timeoutMs;
+
   const stop = root["stop"];
   if (typeof stop === "string") request.stop = [stop];
   else if (Array.isArray(stop)) request.stop = asArray(stop, "stop").map((s, i) => asString(s, `stop[${i}]`));

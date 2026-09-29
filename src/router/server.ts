@@ -338,8 +338,14 @@ async function handleInference(
   // deliberately do NOT come here — the existing OpenAI-compatible path
   // already handles them, and the chat shim is the better-tested one.
   if (target.provider === "cloudflare" && needsRunPath(target.model_id)) {
+    // A generation can run for over a minute, so a client that hangs up must
+    // actually cancel it rather than paying for a render nobody receives.
+    const generationAbort = new AbortController();
+    const onClientGone = (): void => generationAbort.abort();
+    res.once("close", onClientGone);
+
     try {
-      const run = await dispatchCfRun({ db: opts.db, target, request });
+      const run = await dispatchCfRun({ db: opts.db, target, request, signal: generationAbort.signal });
       const ir = toIRResponse(run, request);
       // A modality reply is not a chat completion. The OpenAI image shape is
       // what a client expects for a generation request, so an artifact is
@@ -357,8 +363,12 @@ async function handleInference(
         : encodeOpenAiResponse(ir, `chatcmpl_${randomUUID()}`, Math.floor(Date.now() / 1000));
       sendJson(res, 200, payload);
     } catch (err) {
+      // A cancelled generation has no one left to tell: the socket is gone.
+      if (generationAbort.signal.aborted) return;
       const code = (err as { code?: string }).code ?? "unexpected_error";
       sendError(res, dialect, statusForCode(code), code, (err as Error).message);
+    } finally {
+      res.removeListener("close", onClientGone);
     }
     return;
   }
