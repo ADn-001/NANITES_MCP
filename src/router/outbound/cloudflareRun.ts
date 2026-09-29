@@ -22,8 +22,8 @@ import { NanitesError } from "../../helpers/errors.js";
 import { ROUTER_PROFILE } from "../constants.js";
 import { findCfModel, type CfModelDef } from "../providers/cloudflare/catalog.js";
 import { buildRunBody, decodeRunResponse, runUrl, type CfArtifact } from "../providers/cloudflare/run.js";
-import type { IRRequest, IRResponse } from "../ir/types.js";
-import type { ResolvedTarget } from "./resolve.js";
+import type { IRRequest, IRResponse, Modality } from "../ir/types.js";
+import type { RoutableTarget } from "./resolve.js";
 import { selectKey } from "./dispatch.js";
 
 /**
@@ -42,9 +42,32 @@ export function needsRunPath(modelId: string): boolean {
   return def.category !== "text-generation";
 }
 
+/**
+ * The output modality a Cloudflare model's CATEGORY implies.
+ *
+ * Used to detect a caller who addressed a generator but sent it something
+ * else. Derived from the registry rather than from the id string, because the
+ * id is exactly the thing that may be wrong.
+ *
+ * `image-to-text` is deliberately "text": a VQA model CONSUMES an image and
+ * PRODUCES text, so calling it a text request is correct.
+ */
+export function cfCategoryModality(modelId: string): Modality {
+  const def = findCfModel(modelId);
+  switch (def?.category) {
+    case "text-to-image":
+    case "image-to-image":
+      return "image";
+    case "text-to-speech":
+      return "audio";
+    default:
+      return "text";
+  }
+}
+
 export interface CfDispatchInput {
   db: DatabaseSync;
-  target: ResolvedTarget;
+  target: RoutableTarget;
   request: IRRequest;
   key_id?: string;
   /**
@@ -210,7 +233,7 @@ function request0Of(input: CfDispatchInput) {
 /** The next un-attempted key on the named provider, or null when none is left. */
 function nextAvailableKey(
   db: DatabaseSync,
-  target: ResolvedTarget,
+  target: RoutableTarget,
   attempted: Set<string>,
 ): ReturnType<typeof selectKey> | null {
   for (let i = 0; i < 12; i++) {

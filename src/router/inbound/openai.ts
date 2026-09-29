@@ -220,6 +220,15 @@ export function decodeOpenAiRequest(body: unknown): IRRequest {
   const timeoutMs = optionalNumber(root["timeout_ms"], "timeout_ms");
   if (timeoutMs !== undefined) (request as { timeout_ms?: number }).timeout_ms = timeoutMs;
 
+  // `response_format`, carried so a helper target knows what to extract into.
+  // Only the members this router actually acts on are promoted onto the IR;
+  // everything else rides along verbatim and is ignored by a provider model.
+  if (root["response_format"] !== undefined) {
+    request.response_format = root["response_format"];
+    const schema = structuredOutputFields(root["response_format"]);
+    if (schema) request.output_schema = schema;
+  }
+
   const stop = root["stop"];
   if (typeof stop === "string") request.stop = [stop];
   else if (Array.isArray(stop)) request.stop = asArray(stop, "stop").map((s, i) => asString(s, `stop[${i}]`));
@@ -302,4 +311,75 @@ function textOf(ir: IRResponse): string {
     .filter((p): p is { type: "text"; text: string } => p.type === "text")
     .map((p) => p.text)
     .join("");
+}
+
+/**
+ * Pull a field-name -> type-spelling map out of a `response_format`.
+ *
+ * Accepts both spellings a real client sends: a full JSON Schema under
+ * `json_schema.schema` (the OpenAI structured-output shape), and the flat
+ * `{field: "str"}` form the Needle bridge takes directly. JSON Schema types
+ * are MAPPED rather than passed through, because the bridge compiles the map
+ * into Python dataclass annotations and `{"type": "string"}` is not a type.
+ *
+ * A schema with no usable fields returns null rather than an empty map: an
+ * empty schema would compile to a dataclass with nothing in it, and the
+ * adapter's "at least one field" check should be the one that rejects it.
+ */
+function structuredOutputFields(format: unknown): Record<string, string> | null {
+  if (typeof format !== "object" || format === null) return null;
+  const root = format as Record<string, unknown>;
+  // Three envelopes, because three real clients spell it three ways:
+  //   {json_schema:{schema:{...}}}  the OpenAI structured-output shape
+  //   {schema:{...}}               a bare schema key
+  //   {city:"str", ...}            the flat form, with no wrapper at all
+  // Unwrapping is what makes all three reach the same two branches below.
+  const source = firstObject(
+    (root["json_schema"] as Record<string, unknown> | undefined)?.["schema"],
+    root["schema"],
+    root,
+  );
+  if (!source) return null;
+
+  const properties = (source as Record<string, unknown>)["properties"];
+  const required = new Set(
+    Array.isArray((source as Record<string, unknown>)["required"])
+      ? ((source as Record<string, unknown>)["required"] as unknown[]).map(String)
+      : [],
+  );
+
+  const out: Record<string, string> = {};
+  if (typeof properties === "object" && properties !== null) {
+    for (const [name, raw] of Object.entries(properties as Record<string, unknown>)) {
+      // A field the schema does not require is optional, and the dataclass
+      // cannot express that — so it is dropped rather than silently demanded.
+      if (required.size > 0 && !required.has(name)) continue;
+      out[name] = jsonTypeToSpelling((raw as Record<string, unknown> | undefined)?.["type"]);
+    }
+    return Object.keys(out).length > 0 ? out : null;
+  }
+
+  // The flat form: {city: "str", total: "float"}.
+  for (const [name, raw] of Object.entries(source as Record<string, unknown>)) {
+    if (typeof raw === "string") out[name] = raw;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+/** The first argument that is a plain object, or null. */
+function firstObject(...values: unknown[]): Record<string, unknown> | null {
+  for (const v of values) {
+    if (typeof v === "object" && v !== null && !Array.isArray(v)) return v as Record<string, unknown>;
+  }
+  return null;
+}
+
+/** JSON Schema primitive name -> the type spelling the bridge emits. */
+function jsonTypeToSpelling(type: unknown): string {
+  switch (type) {
+    case "number": return "float";
+    case "integer": return "int";
+    case "boolean": return "bool";
+    default: return "str";
+  }
 }

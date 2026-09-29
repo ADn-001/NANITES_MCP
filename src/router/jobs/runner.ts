@@ -16,7 +16,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { NanitesError } from "../../helpers/errors.js";
 import { setTimeout as delay } from "node:timers/promises";
 import { dispatchCfRun } from "../outbound/cloudflareRun.js";
-import { resolveTarget } from "../outbound/resolve.js";
+import { resolveTarget, isRoutable } from "../outbound/resolve.js";
+import { resolveHelperAlias } from "../helpers/registry.js";
 import { decodeOpenAiRequest } from "../inbound/openai.js";
 import { decodeAnthropicRequest } from "../inbound/anthropic.js";
 import type { IRRequest } from "../ir/types.js";
@@ -55,6 +56,26 @@ export async function runJob(opts: RunJobOptions): Promise<RunResult> {
 
   const stored = job.request as unknown as { body: unknown; dialect: "openai" | "anthropic" };
   const target = resolveTarget(opts.db, job.model);
+
+  // A job exists to run a slow provider generation. A local helper is neither
+  // slow nor remote, and `dispatchCfRun` below is Cloudflare-specific, so a
+  // helper job is refused explicitly rather than dispatched to a path that
+  // cannot serve it. Failing here says why; dispatching would say "no key".
+  if (!isRoutable(target)) {
+    store.update(job.job_id, {
+      status: "failed",
+      phase: "failed",
+      error: {
+        code: "router_invalid_request",
+        message: `"${job.model}" is a local helper model, not a provider generation. POST /v1/jobs runs provider models; use POST /v1/helpers/${resolveHelperAlias(target.model_id)?.op ?? ""} for a helper.`,
+      },
+    });
+    throw new NanitesError({
+      code: "router_invalid_request",
+      message: `Job model "${job.model}" is a local helper, which cannot be run as an async job.`,
+      retryable: false,
+    });
+  }
 
   // The stored body carries whatever model name the CALLER wrote, which may be
   // a bare id while the job is addressed by the namespaced one. Normalise it

@@ -94,6 +94,22 @@ export interface IRRequest {
   stop?: string[];
   /** Declared by the caller. Absent means "classify it" (R5a). */
   output_modality?: Modality;
+  /**
+   * Field-name -> type spelling (`str` | `float` | `int` | `bool`), from
+   * `response_format.json_schema`. A helper extraction target, NOT a full JSON
+   * Schema: the bridge compiles it into a dataclass, so only the field names
+   * and kinds are meaningful.
+   */
+  output_schema?: Record<string, string>;
+  /**
+   * The caller's `response_format` verbatim.
+   *
+   * Carried rather than parsed because it is dialect-specific and helper-only:
+   * `options` and `criteria` (the classify/score label lists) have no standard
+   * home, and dropping them would leave those ops with no way to be told what
+   * to choose between.
+   */
+  response_format?: unknown;
 }
 
 export interface IRUsage {
@@ -105,7 +121,8 @@ export interface IRUsage {
 export interface IRServedBy {
   provider: string;
   model_id: string;
-  key_id: string;
+  /** Null for a local helper, which has no provider account. */
+  key_id: string | null;
 }
 
 export interface IRResponse {

@@ -96,6 +96,14 @@ function publishForTest(home, textModel, imgModel) {
       db.prepare(
         "INSERT OR REPLACE INTO router_advertised (alias,real_id,provider,modalities,context_window,created_at) VALUES (?,?,?,?,?,?)",
       ).run(alias, realId, "cloudflare", JSON.stringify(mods), ctx, now);
+      // The CATALOG row alone is not enough. `inventory()` reads
+      // provider_models to decide which model is a usable text model, so a
+      // harness that published only router_advertised reported "0 models" and
+      // then skipped every text assertion — a green run that tested nothing.
+      // A failure here must be loud rather than a silent skip.
+      db.prepare(
+        "INSERT OR REPLACE INTO provider_models (profile_name,provider,model_id,name,supported_modalities,is_registered,created_at,updated_at) VALUES (?,?,?,?,?,1,?,?)",
+      ).run("__router__", "cloudflare", realId, realId, JSON.stringify(mods), now, now);
     }
     db.close();
   } catch (e) {
@@ -354,11 +362,81 @@ async function main() {
     console.log("\nHelpers");
     const hh = await get("/v1/health");
     const helperDetail = hh.body?.helpers?.detail ?? {};
-    const needleOk = hh.body?.helpers?.needle === true;
-    const layaOk = hh.body?.helpers?.laya === true;
-    record(needleOk || !needleOk, "helper status is reported", `needle=${needleOk} laya=${layaOk}`);
-    if (!needleOk) console.log(`       needle: ${helperDetail.needle}`);
-    if (!layaOk) console.log(`       laya: ${helperDetail.laya}`);
+    // A real assertion. The previous `needleOk || !needleOk` was a tautology
+    // that could never fail, which is how a half-wired phase reported green.
+    const needleFlag = hh.body?.helpers?.needle;
+    const layaFlag = hh.body?.helpers?.laya;
+    record(typeof needleFlag === "boolean" && typeof layaFlag === "boolean",
+      "health reports a real boolean per helper", `needle=${needleFlag} laya=${layaFlag}`);
+    if (needleFlag !== true) console.log(`       needle: ${helperDetail.needle}`);
+    if (layaFlag !== true) console.log(`       laya: ${helperDetail.laya}`);
+
+    // The config surface, against the live binary.
+    const cfg = await get("/v1/config");
+    record(cfg.status === 200 && typeof cfg.body?.enable_helpers === "boolean",
+      "GET /v1/config", `enable_helpers=${cfg.body?.enable_helpers}`);
+    const badCfg = await fetch(`${BASE}/v1/config`, {
+      method: "PATCH", headers: auth(), body: JSON.stringify({ port: 1 }),
+    });
+    record(badCfg.status === 400, "PATCH /v1/config rejects an unwritable field", String(badCfg.status));
+
+    // Enable, then check the invariant that matters: every name the catalog
+    // advertises resolves, instead of 400-ing as alias_unknown.
+    const enabled = await fetch(`${BASE}/v1/config`, {
+      method: "PATCH", headers: auth(), body: JSON.stringify({ enable_helpers: true }),
+    });
+    const enabledBody = await enabled.json().catch(() => null);
+    record(enabled.status === 200 && enabledBody?.enable_helpers === true,
+      "PATCH /v1/config enables helpers", String(enabledBody?.enable_helpers));
+
+    const liveModels = await get("/v1/models");
+    // The HELPER aliases specifically. Filtering on a "nanites-" prefix is not
+    // enough: this harness also publishes `nanites-cf-text` / `nanites-cf-image`,
+    // so a prefix match picks up provider models and asserts nothing about
+    // helpers. The names are the four the registry declares.
+    const HELPER_ALIASES = [
+      "nanites-needle-extract", "nanites-needle-embed",
+      "nanites-laya-classify", "nanites-laya-score",
+    ];
+    const liveIds = (liveModels.body?.data ?? []).map((m) => m.id);
+    const advertised = HELPER_ALIASES.filter((a) => liveIds.includes(a));
+    record(advertised.length > 0, "helper aliases are advertised once enabled", advertised.join(", ") || "none");
+
+    // A bad helper request is a 400, not a 503: the argument is wrong
+    // regardless of whether the model is installed.
+    const oneOption = await post("/v1/helpers/classify", { state: "s", options: ["only"] });
+    record(oneOption.status === 400, "a malformed helper request is 400, not 503", String(oneOption.status));
+
+    if (advertised.length > 0) {
+      const withSchema = advertised.find((id) => id.includes("extract"));
+      if (withSchema) {
+        const routed = await post("/v1/chat/completions", {
+          model: withSchema,
+          messages: [{ role: "user", content: "Order 8812 for 3 widgets, 249.50 EUR, shipping to Berlin." }],
+          response_format: {
+            json_schema: {
+              schema: {
+                type: "object",
+                properties: { order_id: { type: "integer" }, city: { type: "string" }, total: { type: "number" } },
+                required: ["order_id", "city", "total"],
+              },
+            },
+          },
+        });
+        const text = routed.body?.choices?.[0]?.message?.content;
+        let parsed = null;
+        try { parsed = JSON.parse(text); } catch { /* not JSON */ }
+        record(routed.status === 200 && parsed && parsed.order_id === 8812,
+          "helper extraction over the chat path", JSON.stringify(parsed)?.slice(0, 60) ?? String(routed.status));
+      }
+      // Streaming a local model is refused pre-header, not 402.
+      const streamed = await post("/v1/chat/completions", {
+        model: advertised[0], stream: true,
+        messages: [{ role: "user", content: "hi" }],
+      });
+      record(streamed.status === 400, "a helper refuses stream:true with 400", String(streamed.status));
+    }
+
     // Absent helpers must not break anything: the catalog must still answer.
     record(models.status === 200, "catalog still serves with helpers unavailable");
   } finally {

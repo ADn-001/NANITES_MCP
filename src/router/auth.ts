@@ -16,6 +16,7 @@ import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { nowIso } from "../storage/db.js";
 import { tokensMatch } from "../ui/guards.js";
+import { NanitesError } from "../helpers/errors.js";
 
 /** scrypt cost parameters. N=16384 is the Node default and ~100ms per call. */
 const SCRYPT_N = 16384;
@@ -178,6 +179,53 @@ export function ensureConfigRow(db: DatabaseSync): RouterConfigRow {
 export function saveKeyHash(db: DatabaseSync, key: string, salt: string): void {
   db.prepare("UPDATE router_config SET virtual_key_hash = ?, key_salt = ?, updated_at = ? WHERE id = 1")
     .run(hashVirtualKey(key, salt), salt, nowIso());
+}
+
+/**
+ * The only config fields a runtime caller may change.
+ *
+ * A WHITELIST, not a column list. `port` and `bind` change what the process is
+ * reachable on, and `virtual_key_hash` would lock the caller out of their own
+ * gateway — neither belongs behind a JSON patch. Everything here is a boolean
+ * feature flag with a defined off state, so there is no such thing as a
+ * partial write to recover from.
+ */
+const WRITABLE_FLAGS = ["enable_helpers", "enable_model_repair"] as const;
+
+export type WritableFlag = (typeof WRITABLE_FLAGS)[number];
+
+/**
+ * Apply a config patch and return the effective row.
+ *
+ * Unknown keys are REJECTED rather than ignored. A silently-dropped field
+ * reads as "the router accepted my setting" and is discovered days later, when
+ * the flag is still off and nobody remembers sending the request.
+ */
+export function updateConfig(db: DatabaseSync, patch: Record<string, unknown>): RouterConfigRow {
+  for (const key of Object.keys(patch)) {
+    if (!(WRITABLE_FLAGS as readonly string[]).includes(key)) {
+      throw new NanitesError({
+        code: "router_invalid_request",
+        message: `"${key}" is not a writable config field. Writable: ${WRITABLE_FLAGS.join(", ")}.`,
+        retryable: false,
+        details: { key, writable: [...WRITABLE_FLAGS] },
+      });
+    }
+    if (typeof patch[key] !== "boolean") {
+      throw new NanitesError({
+        code: "router_invalid_request",
+        message: `"${key}" must be a boolean.`,
+        retryable: false,
+        details: { key },
+      });
+    }
+  }
+  if (Object.keys(patch).length > 0) {
+    const sets = Object.keys(patch).map((k) => `${k} = ?`).join(", ");
+    db.prepare(`UPDATE router_config SET ${sets}, updated_at = ? WHERE id = 1`)
+      .run(...Object.values(patch).map((v) => (v ? 1 : 0)), nowIso());
+  }
+  return ensureConfigRow(db);
 }
 
 /**

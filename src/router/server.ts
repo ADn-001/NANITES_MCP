@@ -13,13 +13,13 @@
 import http from "node:http";
 import { randomUUID, createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { bearerToken, verifyVirtualKey, readConfig } from "./auth.js";
+import { bearerToken, verifyVirtualKey, readConfig, updateConfig } from "./auth.js";
 import { detectDialect, errorFor, type Dialect } from "./dialect.js";
 import { assertOutboundUrl } from "../ui/guards.js";
 import { NanitesError } from "../helpers/errors.js";
 import { decodeAnthropicRequest, encodeAnthropicResponse } from "./inbound/anthropic.js";
 import { decodeOpenAiRequest, encodeOpenAiResponse } from "./inbound/openai.js";
-import { resolveTarget, type ResolvedTarget } from "./outbound/resolve.js";
+import { resolveTarget, isRoutable, type ResolvedTarget, type RoutableTarget } from "./outbound/resolve.js";
 import { listAdvertised, renderCatalog, type AdvertisedModel } from "./models/catalog.js";
 import { getAlias, walkChain, setStickyWinner, type ChainCandidate } from "./models/aliases.js";
 import { createSseWriter } from "./stream/sse.js";
@@ -29,9 +29,9 @@ import { openUpstreamStream, type OpenedUpstream } from "./outbound/streamDispat
 import { RateLimiter, DEFAULT_RATE_LIMIT } from "./security/rateLimit.js";
 import { startTunnel, type TunnelHandle } from "./transport/tunnel.js";
 import { JobStore, type JobRow } from "./jobs/store.js";
-import { helperStatus, warmHelpers, classifyReply } from "./helpers/registry.js";
+import { helperStatus, warmHelpers, awaitProbeHelpers, guessModality, HELPER_ALIASES, dispatchHelper, runHelperOp, resolveHelperAlias, type HelperAlias } from "./helpers/registry.js";
 import { runJob } from "./jobs/runner.js";
-import { needsRunPath, dispatchCfRun, toIRResponse } from "./outbound/cloudflareRun.js";
+import { needsRunPath, dispatchCfRun, toIRResponse, cfCategoryModality } from "./outbound/cloudflareRun.js";
 import type { IRRequest } from "./ir/types.js";
 import { countTokens } from "../helpers/tokenize.js";
 import { partsToText } from "./ir/types.js";
@@ -260,6 +260,15 @@ async function readBodyText(req: http.IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
+/** A list of strings, or undefined. A non-array is undefined, not a crash. */
+function stringArray(value: unknown): string[] | undefined {
+  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /** Map a router/provider error code onto an HTTP status. */
 function statusForCode(code: string): number {
   switch (code) {
@@ -289,6 +298,14 @@ function statusForCode(code: string): number {
     case "chain_exhausted":
     case "all_models_exhausted":
       return 503;
+    // A helper that is off, or installed but broken. 503 and not 500: the
+    // router is fine and the request was well-formed, so a client should
+    // retry rather than treat this as a permanent failure.
+    case "helper_unavailable":
+      return 503;
+    // The helper ran and could not satisfy the request. The upstream worked.
+    case "helper_no_result":
+      return 422;
     default:
       return 500;
   }
@@ -327,7 +344,7 @@ async function handleInference(
     return;
   }
 
-  const request = anthropicPath ? decodeAnthropicRequest(body) : decodeOpenAiRequest(body);
+  let request = anthropicPath ? decodeAnthropicRequest(body) : decodeOpenAiRequest(body);
 
   // An alias is a CHAIN, not a single target. Resolve it first; a bare
   // advertised name or a namespaced id resolves to exactly one candidate and
@@ -341,7 +358,7 @@ async function handleInference(
         alias.candidates,
         startAt,
         async (candidate: ChainCandidate) => {
-          const resolved: ResolvedTarget = {
+          const resolved: RoutableTarget = {
             provider: candidate.provider as never,
             endpoint: candidate.endpoint ?? null,
             model_id: candidate.model_id,
@@ -365,7 +382,9 @@ async function handleInference(
     }
     // The chain walker returns the raw answer shape; re-dispatch the winner so
     // the caller gets the full response with usage and served_by.
+    // Past the helper branch above, so this target is a real provider.
     const target = resolveTarget(opts.db, request.model);
+    if (!isRoutable(target)) throw new Error("unreachable: a helper cannot reach the chain re-dispatch");
     const response = await dispatchWithFailover({ db: opts.db, target, request });
     const payload = anthropicPath
       ? encodeAnthropicResponse(response, `msg_${randomUUID()}`)
@@ -376,11 +395,68 @@ async function handleInference(
 
   const target = resolveTarget(opts.db, request.model);
 
+  // A LOCAL HELPER. Checked before the Cloudflare branch and before the
+  // streaming branch, because neither applies: a helper has no provider key
+  // (so the key machinery would fail with a misleading "all keys exhausted"),
+  // and it produces a single result rather than a token stream.
+  if (target.provider === "helper") {
+    const entry = resolveHelperAlias(target.model_id);
+    if (!entry) {
+      sendError(res, dialect, 400, "alias_unknown",
+        `"${request.model}" resolved to helper model "${target.model_id}", which is not a known helper.`);
+      return;
+    }
+    if (request.stream) {
+      // Refused here, BEFORE any header is written, so the caller gets a
+      // proper JSON error rather than a 200 followed by a fabricated stream.
+      sendError(res, dialect, 400, "router_invalid_request",
+        `"${entry.alias}" is a local model and does not support stream:true. Send a non-streaming request, or use POST /v1/helpers/${entry.op}.`);
+      return;
+    }
+    try {
+      const ir = await dispatchHelper(opts.db, entry, request);
+      const payload = anthropicPath
+        ? encodeAnthropicResponse(ir, `msg_${randomUUID()}`)
+        : encodeOpenAiResponse(ir, `chatcmpl_${randomUUID()}`, Math.floor(Date.now() / 1000));
+      sendJson(res, 200, payload);
+    } catch (err) {
+      const code = (err as { code?: string }).code ?? "helper_unavailable";
+      sendError(res, dialect, statusForCode(code), code, (err as Error).message);
+    }
+    return;
+  }
+
+  // Past the helper branch, so this target is a real provider with a real
+  // account. Narrowed once here rather than at four call sites below.
+  if (!isRoutable(target)) {
+    sendError(res, dialect, 400, "alias_unknown", `"${request.model}" is not a dispatchable model.`);
+    return;
+  }
+
   // A Cloudflare model outside the chat-completions shim goes to /ai/run,
   // which serves image, TTS, ASR, and the VQA models. Text-generation models
   // deliberately do NOT come here — the existing OpenAI-compatible path
   // already handles them, and the chat shim is the better-tested one.
   if (target.provider === "cloudflare" && needsRunPath(target.model_id)) {
+    // A CONFIDENT contradiction is refused, never a reroute. The generation
+    // path is already chosen because the MODEL is a generator; a text-only
+    // request that Laya confidently calls "image" is a caller mistake worth
+    // naming, but the router has no business silently swapping models on the
+    // strength of a small classifier. Not confident -> carry on, which is
+    // exactly the behaviour from before helpers existed.
+    const declared = request.output_modality;
+    const hasMedia = request.messages.some((m) =>
+      typeof m.content !== "string" && m.content.some((p) => p.type !== "text"));
+    if (!declared && !hasMedia) {
+      const guess = await guessModality(opts.db, [], undefined);
+      request = { ...request, output_modality: guess.modality };
+      if (guess.source === "laya" && guess.modality !== "text" && guess.modality !== cfCategoryModality(target.model_id)) {
+        sendError(res, dialect, 400, "router_invalid_request",
+          `"${target.model_id}" generates ${cfCategoryModality(target.model_id)} output, but this request looks like a ${guess.modality} request and carries no ${guess.modality} input. Send the image, or address a text model instead.`);
+        return;
+      }
+    }
+
     // A generation can run for over a minute, so a client that hangs up must
     // actually cancel it rather than paying for a render nobody receives.
     const generationAbort = new AbortController();
@@ -446,7 +522,7 @@ async function handleStreaming(
   res: http.ServerResponse,
   opts: RouterServerOptions,
   anthropicPath: boolean,
-  target: ResolvedTarget,
+  target: RoutableTarget,
   request: IRRequest,
 ): Promise<void> {
   const dialect: Dialect = anthropicPath ? "anthropic" : "openai";
@@ -611,6 +687,86 @@ async function handle(
     return;
   }
 
+  /* --------------------------------------------------------------- config */
+  // Behind the virtual key like everything else: a flag that turns a local
+  // model on or off is not an anonymous action, and the router may be exposed
+  // through a tunnel.
+  if (pathname === "/v1/config" || pathname === "/v1/config/") {
+    if (req.method === "GET") {
+      const c = readConfig(opts.db);
+      sendJson(res, 200, {
+        enable_helpers: Boolean(c?.enable_helpers),
+        enable_model_repair: Boolean(c?.enable_model_repair),
+        // Effective availability, so a caller can tell "off" from "on but the
+        // package is not installed" without a second request.
+        helpers: helperStatus(opts.db),
+      });
+      return;
+    }
+    if (req.method === "PATCH" || req.method === "POST") {
+      let patch: Record<string, unknown>;
+      try {
+        patch = JSON.parse(await readBodyText(req)) as Record<string, unknown>;
+      } catch {
+        sendError(res, dialect, 400, "router_invalid_request", "Body is not valid JSON.");
+        return;
+      }
+      if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
+        sendError(res, dialect, 400, "router_invalid_request", "Body must be a JSON object of config fields.");
+        return;
+      }
+      try {
+        const c = updateConfig(opts.db, patch);
+        // Turning helpers ON has to AWAIT the probe, not fire it: the response
+        // reports availability, and an unawaited probe would answer "false" for
+        // a model that is installed and about to load.
+        if (c.enable_helpers) await awaitProbeHelpers(opts.db);
+        sendJson(res, 200, {
+          enable_helpers: Boolean(c.enable_helpers),
+          enable_model_repair: Boolean(c.enable_model_repair),
+          helpers: helperStatus(opts.db),
+        });
+      } catch (err) {
+        const code = (err as { code?: string }).code ?? "router_invalid_request";
+        sendError(res, dialect, statusForCode(code), code, (err as Error).message);
+      }
+      return;
+    }
+  }
+
+  /* -------------------------------------------------------------- helpers */
+  // The dedicated surface: the helper's own result shape, not a chat
+  // completion with the answer buried in a text block.
+  const helperRoute = /^\/v1\/helpers\/(extract|classify|embed|score)\/?$/.exec(pathname);
+  if (helperRoute && req.method === "POST") {
+    const op = helperRoute[1] as "extract" | "classify" | "embed" | "score";
+    const entry = HELPER_ALIASES.find((h) => h.op === op)!;
+    let body: Record<string, unknown>;
+    try {
+      body = JSON.parse(await readBodyText(req)) as Record<string, unknown>;
+    } catch {
+      sendError(res, dialect, 400, "router_invalid_request", "Body is not valid JSON.");
+      return;
+    }
+    const out = await runHelperOp(opts.db, entry, {
+      text: typeof body["text"] === "string" ? body["text"] : undefined,
+      state: typeof body["state"] === "string" ? body["state"] : undefined,
+      options: stringArray(body["options"]),
+      criteria: stringArray(body["criteria"]),
+      schema: isRecord(body["schema"]) ? body["schema"] : undefined,
+    });
+    if (!out.ok) {
+      // 503 for "not available", 400 for "your request was wrong". Conflating
+      // them sends an operator to debug their payload when the real problem is
+      // a missing Python package.
+      const status = out.code === "router_invalid_request" ? 400 : 503;
+      sendError(res, dialect, status, out.code, out.message);
+      return;
+    }
+    sendJson(res, 200, { object: "helper.result", helper: entry.helper, op: entry.op, result: out.result });
+    return;
+  }
+
   // ---- async generation jobs ----
   if (pathname === "/v1/jobs" || pathname === "/v1/jobs/") {
     const store = new JobStore(opts.db);
@@ -734,19 +890,20 @@ async function handle(
     // Helpers are advertised ONLY when actually available. A model listed here
     // that turns out to be missing produces a request-time failure, which is
     // the exact confusion an advertised catalog exists to prevent.
-    const helperModels: AdvertisedModel[] = [];
-    if (hStatus.needle.available) {
-      helperModels.push({
-        alias: "nanites-needle-embed", real_id: "helper:needle3:embed", provider: "helper",
-        modalities: ["text"], context_window: null, created_at: new Date(0).toISOString(),
-      });
-    }
-    if (hStatus.laya.available) {
-      helperModels.push({
-        alias: "nanites-laya-classify", real_id: "helper:laya:classify", provider: "helper",
-        modalities: ["text"], context_window: 512, created_at: new Date(0).toISOString(),
-      });
-    }
+    //
+    // Rendered from HELPER_ALIASES — the same constant resolveTarget consults.
+    // These entries used to be a hand-written pair here, which is how a name
+    // could be listed and then 400 as alias_unknown when a client sent it back.
+    const helperModels: AdvertisedModel[] = HELPER_ALIASES
+      .filter((h) => (h.helper === "needle3" ? hStatus.needle.available : hStatus.laya.available))
+      .map((h) => ({
+        alias: h.alias,
+        real_id: h.real_id,
+        provider: "helper",
+        modalities: h.modalities,
+        context_window: h.context_window,
+        created_at: new Date(0).toISOString(),
+      }));
     sendJson(res, 200, renderCatalog([...advertised, ...helperModels], dialect));
     return;
   }

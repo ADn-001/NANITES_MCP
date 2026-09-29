@@ -45,6 +45,7 @@ import type {
   IRContentPart,
   IRMessage,
   IRRequest,
+  Modality,
   IRResponse,
   IRStopReason,
   IRThinkingBlock,
@@ -255,6 +256,24 @@ export function decodeAnthropicRequest(body: unknown): IRRequest {
   if (Array.isArray(root["stop_sequences"])) {
     request.stop = asArray(root["stop_sequences"], "stop_sequences").map((s, i) => asString(s, `stop_sequences[${i}]`));
   }
+
+  // A declared output modality. Not part of the Messages API, so it is an
+  // opt-in extension a client that knows it sends and a client that does not
+  // is unaffected. It exists because the generation path needs to tell "this
+  // caller MEANT an image request" from "this caller sent text to a
+  // generator", and only the caller knows which.
+  const modality = optionalString(root["output_modality"], "output_modality");
+  if (modality !== undefined) {
+    if (!["text", "image", "audio", "video"].includes(modality)) {
+      throw decodeError("output_modality", `must be one of text, image, audio, video`);
+    }
+    request.output_modality = modality as Modality;
+  }
+
+  // The same structured-output slot the OpenAI decoder reads, so a Claude
+  // client and an OpenAI client address a helper identically. The IR carries
+  // `response_format` verbatim; see ir/types.ts.
+  if (root["response_format"] !== undefined) request.response_format = root["response_format"];
 
   if (Array.isArray(root["tools"])) {
     request.tools = asArray(root["tools"], "tools").map((entry, i) => {

@@ -14,9 +14,16 @@ import { ProviderKeyStore } from "../../storage/providerKeyStore.js";
 import type { ProviderKind } from "../../storage/profileDefaults.js";
 import { ROUTER_PROFILE } from "../constants.js";
 import { getAdvertised } from "../models/catalog.js";
+import { resolveHelperAlias } from "../helpers/registry.js";
 
 export interface ResolvedTarget {
-  provider: ProviderKind;
+  /**
+   * `helper` is NOT a `ProviderKind` and deliberately not made one: a provider
+   * kind feeds the profile schema and `provider_preference_order`, and a
+   * "provider" with no account there is a lie that would leak into the MCP
+   * surface. A local helper has no key and never reaches the key machinery.
+   */
+  provider: ProviderKind | "helper";
   endpoint: string | null;
   model_id: string;
   /** The namespaced id, which is what the outbound layer sends. */
@@ -48,9 +55,26 @@ export function resolveTarget(db: DatabaseSync, model: string): ResolvedTarget {
     });
   }
 
-  // 0. An ADVERTISED alias. Checked FIRST, and it is what makes a
-  //    harness-safe name work: the harness sends `nanites-flash` and it
-  //    resolves to the real namespaced id behind it.
+  // 0. A HELPER alias, checked before anything else that could guess.
+  //
+  //    `parseModelId` does not know "helper" is a provider head, so a helper
+  //    id would fall through to the bare-id search below — and with exactly one
+  //    provider keyed that search is a SUCCESS, silently routing a free local
+  //    request to a paid cloud account with a nonsense model id. Verified
+  //    against the built dist before this check existed:
+  //      helper:needle3:extract -> {provider:"cloudflare", ...}
+  const helper = resolveHelperAlias(id);
+  if (helper) {
+    return {
+      provider: "helper",
+      endpoint: null,
+      model_id: helper.real_id,
+      stored_id: helper.real_id,
+    };
+  }
+
+  // 1. An ADVERTISED alias. It is what makes a harness-safe name work: the
+  //    harness sends `nanites-flash` and it resolves to the real id behind it.
   const advertised = getAdvertised(db, id);
   if (advertised) {
     return {
@@ -61,7 +85,7 @@ export function resolveTarget(db: DatabaseSync, model: string): ResolvedTarget {
     };
   }
 
-  // 1. Already namespaced: `provider:model` or `generic:<endpoint>:model`.
+  // 2. Already namespaced: `provider:model` or `generic:<endpoint>:model`.
   if (isNamespaced(id)) {
     const parsed = parseModelId(id);
     if (!parsed.provider || !VALID_PROVIDERS.has(parsed.provider)) {
@@ -80,7 +104,7 @@ export function resolveTarget(db: DatabaseSync, model: string): ResolvedTarget {
     };
   }
 
-  // 2. A bare id. Search the catalog; refuse to guess.
+  // 3. A bare id. Search the catalog; refuse to guess.
   const store = new ProviderModelStore(db);
   const all = store.listModels(ROUTER_PROFILE);
   const exact = all.filter((m) => m.model_id === id);
@@ -99,7 +123,7 @@ export function resolveTarget(db: DatabaseSync, model: string): ResolvedTarget {
     throw unknownModel(id, exact.map((m) => `${m.provider}:${m.model_id}`));
   }
 
-  // 3. Not in the catalog. A model can still be callable if the provider is
+  // 4. Not in the catalog. A model can still be callable if the provider is
   //    configured and accepts it — the catalog is a discovery cache, not an
   //    allowlist, and refusing here would break every model added since the
   //    last discovery run. But it must be UNAMBIGUOUS across configured
@@ -124,6 +148,24 @@ export function resolveTarget(db: DatabaseSync, model: string): ResolvedTarget {
     retryable: false,
     details: { model: id },
   });
+}
+
+/**
+ * A target that can actually be dispatched to a provider.
+ *
+ * Narrower than `ResolvedTarget` ON PURPOSE. Everything downstream of
+ * resolution — key selection, the provider client, the budget retry — assumes
+ * a real provider account exists. A local helper has none, so letting a
+ * `provider: "helper"` target reach that code produces a misleading
+ * "every key on provider helper failed" rather than an honest refusal. This
+ * type makes that unrepresentable instead of relying on a caller remembering
+ * to branch.
+ */
+export type RoutableTarget = Omit<ResolvedTarget, "provider"> & { provider: ProviderKind };
+
+/** True when the target is a real provider, i.e. not a local helper. */
+export function isRoutable(target: ResolvedTarget): target is RoutableTarget {
+  return target.provider !== "helper";
 }
 
 /** Every provider that could serve `model`, for diagnostics. */

@@ -26,11 +26,11 @@ import { readConfig } from "../auth.js";
 import { RouterKeyStore } from "../keys/store.js";
 import type { KeyStrategy } from "../keys/selector.js";
 import { contentToParts, type IRContentPart, type IRRequest, type IRResponse, type IRStopReason } from "../ir/types.js";
-import type { ResolvedTarget } from "./resolve.js";
+import type { RoutableTarget } from "./resolve.js";
 
 export interface DispatchInput {
   db: DatabaseSync;
-  target: ResolvedTarget;
+  target: RoutableTarget;
   request: IRRequest;
   /** The single key to use. Strategy lands in R3. */
   key_id?: string;
@@ -234,7 +234,7 @@ function retireKey(db: DatabaseSync, provider: ProviderKind, keyId: string, code
  * `all_keys_exhausted` with "Tried 0", which points an operator at the wrong
  * problem entirely. Only "no eligible key remains" becomes null.
  */
-function nextKey(db: DatabaseSync, target: ResolvedTarget, attempted: Set<string>) {
+function nextKey(db: DatabaseSync, target: RoutableTarget, attempted: Set<string>) {
   for (let i = 0; i < 12; i++) {
     let key;
     try {
@@ -258,7 +258,7 @@ function nextKey(db: DatabaseSync, target: ResolvedTarget, attempted: Set<string
  */
 function computeCostFor(
   db: DatabaseSync,
-  target: ResolvedTarget,
+  target: RoutableTarget,
   usage: ChatResponse["usage"],
 ): number | undefined {
   if (!usage) return undefined;
@@ -271,7 +271,7 @@ function computeCostFor(
   return (usage.prompt_tokens / 1e6) * prompt + (usage.completion_tokens / 1e6) * completion;
 }
 
-export function selectKey(db: DatabaseSync, target: ResolvedTarget, keyId?: string) {
+export function selectKey(db: DatabaseSync, target: RoutableTarget, keyId?: string) {
   if (keyId) {
     const available = new ProviderKeyStore(db).availableKeys(ROUTER_PROFILE, target.provider);
     const found = available.find((k) => k.key_id === keyId);
