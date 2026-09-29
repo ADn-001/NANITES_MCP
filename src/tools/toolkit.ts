@@ -231,7 +231,7 @@ const writeRegistryEntrySchema = z.object({
   profile: ID,
   model_id: ID,
   entry: z.object({
-    provider: z.enum(["cloudflare", "openrouter", "omniroute", "generic"]).nullable().optional(),
+    provider: z.enum(["cloudflare", "openrouter", "nvidia", "omniroute", "generic"]).nullable().optional(),
     roles: z.array(z.string()).optional(),
     scores: z.record(z.string(), z.number()).optional(),
     score_minima: z.record(z.string(), z.number()).optional(),
@@ -355,7 +355,7 @@ const registerTestUnitSchema = z.object({ profile: ID, unit: z.record(z.string()
 const runTestRegimenSchema = z.object({
   profile: ID,
   model_id: ID,
-  provider: z.enum(["cloudflare", "openrouter", "omniroute", "generic"]).optional(),
+  provider: z.enum(["cloudflare", "openrouter", "nvidia", "omniroute", "generic"]).optional(),
 });
 const getPendingJudgmentsSchema = z.object({ profile: ID, model_id: ID, unit_ids: z.array(ID).optional() });
 const submitTestJudgmentSchema = z.object({
@@ -391,7 +391,7 @@ const runSubAgentSchema = z
     roles: z.array(z.string().min(1)).optional(),
     model_id: ID.optional(),
     /** Cloud provider to route through instead of local LM Studio. */
-    provider: z.enum(["cloudflare", "openrouter", "omniroute", "generic"]).optional(),
+    provider: z.enum(["cloudflare", "openrouter", "nvidia", "omniroute", "generic"]).optional(),
     task: z.string().optional(),
     effort: z.enum(["low", "medium", "high"]).optional(),
     system_prompt_override: z.string().optional(),
@@ -416,7 +416,7 @@ const startSubAgentJobSchema = z
     brief: z.string().min(1),
     roles: z.array(z.string().min(1)).optional(),
     model_id: ID.optional(),
-    provider: z.enum(["cloudflare", "openrouter", "omniroute", "generic"]).optional(),
+    provider: z.enum(["cloudflare", "openrouter", "nvidia", "omniroute", "generic"]).optional(),
     task: z.string().optional(),
     effort: z.enum(["low", "medium", "high"]).optional(),
     output_schema: outputSchemaField,
@@ -462,7 +462,7 @@ const checkAdaptationSchema = z.object({ profile: ID });
 
 // ---- Phase 1 online providers ----
 const addProviderKeySchema = z.object({
-  provider: z.enum(["cloudflare", "openrouter", "omniroute", "generic"]),
+  provider: z.enum(["cloudflare", "openrouter", "nvidia", "omniroute", "generic"]),
   api_key: z.string(),
   account_id: z.string().optional(),
   // Validated: this URL decides where the provider API key is sent.
@@ -475,36 +475,36 @@ const addProviderKeySchema = z.object({
   nickname: z.string().optional(),
 });
 const removeProviderKeySchema = z.object({
-  provider: z.enum(["cloudflare", "openrouter", "omniroute", "generic"]),
+  provider: z.enum(["cloudflare", "openrouter", "nvidia", "omniroute", "generic"]),
   key_id: ID,
 });
 const listProviderKeysSchema = z.object({
-  provider: z.enum(["cloudflare", "openrouter", "omniroute", "generic"]),
+  provider: z.enum(["cloudflare", "openrouter", "nvidia", "omniroute", "generic"]),
 });
 const toggleProviderKeySchema = z.object({
-  provider: z.enum(["cloudflare", "openrouter", "omniroute", "generic"]),
+  provider: z.enum(["cloudflare", "openrouter", "nvidia", "omniroute", "generic"]),
   key_id: ID,
   enabled: z.boolean(),
 });
 const discoverProviderModelsSchema = z.object({
-  provider: z.enum(["cloudflare", "openrouter", "omniroute", "generic"]),
+  provider: z.enum(["cloudflare", "openrouter", "nvidia", "omniroute", "generic"]),
 });
 const listProviderModelsSchema = z.object({
-  provider: z.enum(["cloudflare", "openrouter", "omniroute", "generic"]),
+  provider: z.enum(["cloudflare", "openrouter", "nvidia", "omniroute", "generic"]),
   registered_only: z.boolean().optional(),
 });
 const registerProviderModelSchema = z.object({
-  provider: z.enum(["cloudflare", "openrouter", "omniroute", "generic"]),
+  provider: z.enum(["cloudflare", "openrouter", "nvidia", "omniroute", "generic"]),
   model_id: ID,
 });
 const deregisterProviderModelSchema = z.object({
-  provider: z.enum(["cloudflare", "openrouter", "omniroute", "generic"]),
+  provider: z.enum(["cloudflare", "openrouter", "nvidia", "omniroute", "generic"]),
   model_id: ID,
 });
 const PIN_PROVIDER_ENUM = ["local", "cloudflare", "openrouter", "omniroute", "generic"] as const;
 const seedProviderModelsSchema = z.object({
   profile: ID.optional(),
-  provider: z.enum(["cloudflare", "openrouter", "omniroute", "generic"]).optional(),
+  provider: z.enum(["cloudflare", "openrouter", "nvidia", "omniroute", "generic"]).optional(),
   model_ids: z.array(ID).optional(),
 });
 const setRolePinSchema = z.object({

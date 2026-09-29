@@ -115,13 +115,14 @@ export interface ToolsConfig {
 }
 
 /** Provider kind enum — local = LM Studio, others = cloud providers. */
-export type ProviderKind = "cloudflare" | "openrouter" | "omniroute" | "generic" | "local";
+export type ProviderKind = "cloudflare" | "openrouter" | "omniroute" | "generic" | "nvidia" | "local";
 
 export interface ProviderPrefs {
   cloudflare?: { enabled: boolean };
   openrouter?: { enabled: boolean };
   omniroute?: { enabled: boolean };
   generic?: { enabled: boolean };
+  nvidia?: { enabled: boolean };
   local?: { enabled: boolean };
 }
 
@@ -330,7 +331,7 @@ export function resolveProfile(input: CreateProfileInput, now: string = new Date
     vision_capable: input.vision_capable ?? DEFAULT_VISION_CAPABLE,
     theme: input.theme ?? DEFAULT_THEME,
     tools: input.tools ?? DEFAULT_TOOLS,
-    provider_preference_order: input.provider_preference_order ?? ["cloudflare", "openrouter", "omniroute", "generic", "local"],
+    provider_preference_order: input.provider_preference_order ?? ["cloudflare", "openrouter", "nvidia", "omniroute", "generic", "local"],
     providers: input.providers ?? {},
     created_at: now,
     updated_at: now,
@@ -429,7 +430,7 @@ const providerPrefsSchema = z.object({
  * no validation at all, so a malformed preference_order silently bricked
  * cloud routing.
  */
-export const PROVIDER_KINDS = ["cloudflare", "openrouter", "omniroute", "generic", "local"] as const;
+export const PROVIDER_KINDS = ["cloudflare", "openrouter", "omniroute", "generic", "nvidia", "local"] as const;
 export const providerPreferenceOrderSchema = z.array(z.enum(PROVIDER_KINDS));
 
 export type ProviderKindName = (typeof PROVIDER_KINDS)[number];

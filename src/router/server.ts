@@ -11,10 +11,38 @@
  * the handler.
  */
 import http from "node:http";
+import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { bearerToken, verifyVirtualKey, readConfig } from "./auth.js";
 import { detectDialect, errorFor, type Dialect } from "./dialect.js";
 import { assertOutboundUrl } from "../ui/guards.js";
+import { NanitesError } from "../helpers/errors.js";
+import { decodeAnthropicRequest, encodeAnthropicResponse } from "./inbound/anthropic.js";
+import { decodeOpenAiRequest, encodeOpenAiResponse } from "./inbound/openai.js";
+import { resolveTarget, type ResolvedTarget } from "./outbound/resolve.js";
+import { createSseWriter } from "./stream/sse.js";
+import { createAnthropicStream, type AnthropicStreamEncoder } from "./stream/anthropicStream.js";
+import { createOpenAiStream, type OpenAiStreamEncoder } from "./stream/openaiStream.js";
+import { openUpstreamStream, type OpenedUpstream } from "./outbound/streamDispatch.js";
+import type { IRRequest } from "./ir/types.js";
+import { countTokens } from "../helpers/tokenize.js";
+import { partsToText } from "./ir/types.js";
+
+/**
+ * Best-effort input-token estimate for the opening frame.
+ *
+ * Deliberately an ESTIMATE and labelled as one. It is overwritten by the real
+ * provider count in the final usage block, which is the one clients bill and
+ * budget from.
+ */
+function estimateInputTokens(request: IRRequest): number {
+  let total = request.system ? countTokens(request.system) : 0;
+  for (const m of request.messages) total += countTokens(partsToText(m.content));
+  for (const t of request.tools ?? []) total += countTokens(`${t.name}${t.description}`);
+  return total;
+}
+import { dispatchWithFailover } from "./outbound/dispatch.js";
+import { ROUTER_PROFILE } from "./constants.js";
 
 /** Distinct from the dashboard's 4700 so both can run simultaneously. */
 export const DEFAULT_ROUTER_PORT = 4800;
@@ -109,7 +137,7 @@ function providerKeyCounts(db: DatabaseSync): Array<{ provider: string; keys: nu
     const rows = db.prepare(
       `SELECT provider, COUNT(*) AS n FROM provider_api_keys
         WHERE profile_name = ? GROUP BY provider ORDER BY provider`,
-    ).all("__router__") as Array<{ provider: string; n: number }>;
+    ).all(ROUTER_PROFILE) as Array<{ provider: string; n: number }>;
     return rows.map((r) => ({ provider: r.provider, keys: Number(r.n) }));
   } catch {
     return [];
@@ -141,14 +169,223 @@ export function createRouterServer(opts: RouterServerOptions): http.Server {
   const startedAt = Date.now();
 
   return http.createServer((req, res) => {
-    void handle(req, res, opts, startedAt).catch(() => {
+    // The catch-all dialect is a guess only for a failure that happens before
+    // the request handler could determine one. A handler that already knows
+    // sends its own shaped error; this is the last-resort net.
+    const fallbackDialect = detectDialect(req.headers);
+    void handle(req, res, opts, startedAt).catch((err: unknown) => {
       if (!res.headersSent) {
-        sendError(res, "openai", 500, "unexpected_error", "Unhandled router error");
+        const code = (err as { code?: string })?.code ?? "unexpected_error";
+        const message = (err as { message?: string })?.message ?? "Unhandled router error";
+        const status = statusForCode(code);
+        sendError(res, fallbackDialect, status, code, message);
       } else {
         res.end();
       }
     });
   });
+}
+
+/** Map a router/provider error code onto an HTTP status. */
+function statusForCode(code: string): number {
+  switch (code) {
+    case "router_unauthorized":
+      return 401;
+    case "router_invalid_request":
+    case "alias_unknown":
+    case "alias_candidate_unknown":
+    case "endpoint_not_configured":
+    case "tool_call_unrepairable":
+    case "modality_unsupported":
+      return 400;
+    case "provider_auth_error":
+    case "provider_forbidden":
+      return 403;
+    case "provider_model_not_found":
+      return 404;
+    case "provider_rate_limited":
+      return 429;
+    case "provider_insufficient_credits":
+    case "all_keys_exhausted":
+    case "provider_key_required":
+      return 402;
+    case "provider_timeout":
+      return 504;
+    case "chain_exhausted":
+    case "all_models_exhausted":
+      return 503;
+    default:
+      return 500;
+  }
+}
+
+/**
+ * The inference path: decode -> resolve -> dispatch -> encode.
+ *
+ * Every failure here is already a structured NanitesError, so the outer
+ * handler's catch can shape it into the caller's dialect without this function
+ * needing to know which dialect it is serving.
+ */
+async function handleInference(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  opts: RouterServerOptions,
+  dialect: Dialect,
+  pathname: string,
+): Promise<void> {
+  const anthropicPath = pathname.startsWith("/v1/messages");
+
+  let body: unknown;
+  try {
+    body = await readJsonBody(req);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message === "body_too_large") {
+      sendError(res, dialect, 413, "router_invalid_request", `Request body exceeds ${MAX_BODY_BYTES} bytes`);
+      return;
+    }
+    sendError(res, dialect, 400, "router_invalid_request", "Request body is not valid JSON");
+    return;
+  }
+  if (body === null) {
+    sendError(res, dialect, 400, "router_invalid_request", "Request body is required");
+    return;
+  }
+
+  const request = anthropicPath ? decodeAnthropicRequest(body) : decodeOpenAiRequest(body);
+
+  const target = resolveTarget(opts.db, request.model);
+
+  if (request.stream) {
+    await handleStreaming(req, res, opts, anthropicPath, target, request);
+    return;
+  }
+
+  const response = await dispatchWithFailover({ db: opts.db, target, request });
+
+  const payload = anthropicPath
+    ? encodeAnthropicResponse(response, `msg_${randomUUID()}`)
+    : encodeOpenAiResponse(response, `chatcmpl_${randomUUID()}`, Math.floor(Date.now() / 1000));
+
+  sendJson(res, 200, payload);
+}
+
+/**
+ * The streaming path.
+ *
+ * Two failure modes dominate here, and both are handled explicitly:
+ *
+ *  - An error BEFORE `message_start` can still be a proper JSON error envelope,
+ *    because nothing has been written yet.
+ *  - An error AFTER the stream has begun cannot: the client has committed to
+ *    the SSE contract. The stream is still terminated, so the client is never
+ *    left waiting on a socket that will never close.
+ */
+async function handleStreaming(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  opts: RouterServerOptions,
+  anthropicPath: boolean,
+  target: ResolvedTarget,
+  request: IRRequest,
+): Promise<void> {
+  const dialect: Dialect = anthropicPath ? "anthropic" : "openai";
+  const abort = new AbortController();
+
+  // The provider is contacted BEFORE headers are committed. That ordering is
+  // deliberate: once writeHead has run, a JSON error envelope is impossible,
+  // and a client that asked for a stream would get a 200 plus a stream of
+  // nothing. Contacting first means a pre-delta failure (auth, rate limit,
+  // unreachable provider) is reported as a normal error response, and only a
+  // genuinely live stream commits to 200 + text/event-stream.
+  let opened: OpenedUpstream;
+  try {
+    opened = await openUpstreamStream({ db: opts.db, target, request, signal: abort.signal });
+  } catch (err) {
+    const code = (err as { code?: string })?.code ?? "unexpected_error";
+    const message = (err as { message?: string })?.message ?? "upstream unavailable";
+    sendError(res, dialect, statusForCode(code), code, message);
+    return;
+  }
+
+  res.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-cache, no-transform",
+    connection: "keep-alive",
+    "x-accel-buffering": "no",
+  });
+  res.flushHeaders?.();
+
+  const writer = createSseWriter({
+    res,
+    // A harness that hangs up mid-generation must stop the provider call, or
+    // the user's credits burn on output nobody receives.
+    onClose: () => abort.abort(),
+    pingIntervalMs: 15_000,
+  });
+
+  const messageId = anthropicPath ? `msg_${randomUUID()}` : `chatcmpl_${randomUUID()}`;
+  const created = Math.floor(Date.now() / 1000);
+  // The two encoders are deliberately separate types, so the dialect is
+  // narrowed once here rather than cast at every call site.
+  const anthropic = anthropicPath ? createAnthropicStream(writer, messageId) : null;
+  const openai = anthropicPath ? null : createOpenAiStream(writer, messageId, created);
+
+  // message_start carries a chars/4 ESTIMATE because the provider has not been
+  // contacted yet. Anthropic clients read the authoritative count from the
+  // final accumulated message, which message_delta carries for real. A zero
+  // here would not break either Claude Code or the Anthropic SDKs — they read
+  // the final message — but an estimate is more useful than a hard zero and
+  // costs nothing, since countTokens is a synchronous chars/4 fast path.
+  const emptyAssembly = {
+    content: "", thinking: "", signature: "", toolCalls: [],
+    finish_reason: "", usage: { input_tokens: 0, output_tokens: 0 },
+  };
+
+  let began = false;
+  try {
+    if (anthropic) await anthropic.start(estimateInputTokens(request), request.model, messageId);
+    else if (openai) await openai.start(request.model, messageId, created);
+    began = true;
+
+    // Events are pulled from the already-open upstream rather than awaited
+    // inside dispatchStream, so headers commit the moment the stream is live.
+    for await (const event of opened.events()) {
+      if (anthropic) await anthropic.handle(event);
+      else if (openai) await openai.handle(event);
+    }
+    const result = await opened.result;
+
+    if (anthropic) await anthropic.endAll(result);
+    else if (openai) await openai.endAll(result);
+  } catch (err) {
+    // Terminate regardless. A stream that stops without its dialect's
+    // terminator hangs the client until it times out.
+    const code = (err as { code?: string })?.code ?? "unexpected_error";
+    const message = (err as { message?: string })?.message ?? "stream failed";
+    try {
+      // Headers are already committed, so a JSON error envelope is not
+      // available here. The only correct move is to TERMINATE the stream in
+      // its own dialect — a client left waiting on a socket that never closes
+      // is worse than one that receives a well-formed empty completion.
+      if (began) {
+        if (anthropic) await anthropic.endAll(emptyAssembly);
+        else if (openai) await openai.endAll(emptyAssembly);
+      } else {
+        if (anthropic) await anthropic.start(estimateInputTokens(request), request.model, messageId);
+        if (anthropic) await anthropic.endAll(emptyAssembly);
+        else if (openai) {
+          await openai.start(request.model, messageId, created);
+          await openai.endAll(emptyAssembly);
+        }
+      }
+      void code; void message;
+    } catch {
+      // The socket is already gone; nothing left to report to.
+    }
+  } finally {
+    await writer.close();
+  }
 }
 
 async function handle(
@@ -188,6 +425,11 @@ async function handle(
   }
 
   // 3. ROUTES
+  if (req.method === "POST" && (pathname === "/v1/messages" || pathname === "/v1/chat/completions")) {
+    await handleInference(req, res, opts, dialect, pathname);
+    return;
+  }
+
   if (req.method === "GET" && (pathname === "/v1/health" || pathname === "/v1/health/")) {
     sendJson(res, 200, buildHealth(opts, port, bind, startedAt));
     return;

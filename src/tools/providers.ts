@@ -12,7 +12,7 @@ import { ProviderStickyStore } from "../storage/providerStickyStore.js";
 import { requireActiveProfile } from "./deps.js";
 import type { ProviderKind } from "../storage/profileDefaults.js";
 
-const VALID_PROVIDERS: ProviderKind[] = ["cloudflare", "openrouter", "omniroute", "generic"];
+const VALID_PROVIDERS: ProviderKind[] = ["cloudflare", "openrouter", "nvidia", "omniroute", "generic"];
 
 function validateProvider(p: string): ProviderKind {
   if (VALID_PROVIDERS.includes(p as ProviderKind)) return p as ProviderKind;

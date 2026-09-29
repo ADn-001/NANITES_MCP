@@ -59,7 +59,7 @@ export function parseModelId(stored: string): NamespacedModelId {
   const raw = String(stored ?? "");
   const head = raw.split(PROVIDER_ID_SEPARATOR, 1)[0] ?? "";
   const isKind = (h: string): h is ProviderKind =>
-    h === "cloudflare" || h === "openrouter" || h === "omniroute" || h === "generic" || h === "local";
+    h === "cloudflare" || h === "openrouter" || h === "omniroute" || h === "generic" || h === "nvidia" || h === "local";
 
   if (!isKind(head)) {
     return { provider: null, endpoint: null, model_id: raw, namespaced: false };

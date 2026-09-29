@@ -179,7 +179,7 @@ Do not invent fields the user did not give you; create_profile applies documente
     "Bulk-register the canonical Cloudflare agentic models (plus llama-3.2-11b-vision) for a profile: catalog registration with manifest capabilities, registry role-tagging, and default role pins. Idempotent.",
     z.object({
       profile: z.string().optional(),
-      provider: z.enum(["cloudflare", "openrouter", "omniroute", "generic"]).optional(),
+      provider: z.enum(["cloudflare", "openrouter", "nvidia", "omniroute", "generic"]).optional(),
       model_ids: z.array(z.string().min(1)).optional(),
     }),
     (a) =>
