@@ -40,6 +40,14 @@ let restoreFetch: (() => void) | null = null;
 
 const PNG_B64 = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString("base64");
 
+/** Poll a condition rather than sleeping a guessed amount. */
+async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate() && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
 function baseReq(over: Partial<IRRequest> = {}): IRRequest {
   return { model: "m", messages: [{ role: "user", content: "a red cube" }], max_output_tokens: 100, stream: false, ...over };
 }
@@ -177,19 +185,18 @@ describe("timeout and cancellation over HTTP", () => {
       signal: controller.signal,
     }).catch(() => undefined);
 
-    // Wait for the stub to actually be reached, THEN hang up. A fixed short
-    // sleep is a race: the request still has to authenticate, resolve the
-    // model, and select a key before it reaches the provider, and aborting
-    // before that tests nothing.
-    const deadline = Date.now() + 5_000;
-    while (!stubReached && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 25));
-    }
+    // Wait for the stub to actually be REACHED, then hang up. Polling for the
+    // signal rather than sleeping a fixed amount is what makes this stable: the
+    // request still has to authenticate, resolve the model, and select a key
+    // before it reaches the provider, and under full-suite load that can take
+    // longer than any fixed guess. A short sleep here produced a FLAKE that
+    // only appeared in a full run, never in isolation.
+    await waitFor(() => stubReached, 15_000);
     expect(stubReached).toBe(true);
 
     controller.abort();
     await pending;
-    await new Promise((r) => setTimeout(r, 100));
+    await waitFor(() => upstreamAborted, 5_000);
 
     expect(upstreamAborted).toBe(true);
   });
