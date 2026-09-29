@@ -37,6 +37,7 @@ import {
   optionalNumber,
   optionalString,
 } from "./decodeError.js";
+import { repairAndValidate } from "../../helpers/toolCallRepair.js";
 import type {
   IRContentPart,
   IRMessage,
@@ -115,19 +116,29 @@ function mimeFromDataUri(data: string): string | null {
   return data.slice("data:".length, end);
 }
 
-function decodeToolCalls(raw: unknown, path: string): IRToolCall[] {
+/**
+ * Decode tool calls, repairing the arguments.
+ *
+ * This is the SINGLE point where a tool call enters the IR, so repairing here
+ * means every downstream consumer benefits and there is exactly one place to
+ * audit. A call whose arguments cannot be repaired is a decode error — never a
+ * call with empty arguments, which is the silent failure this replaces.
+ */
+function decodeToolCalls(raw: unknown, path: string, schemas: Map<string, Record<string, unknown>>): IRToolCall[] {
   return asArray(raw, path).map((entry, i) => {
     const p = `${path}[${i}]`;
     const call = asRecord(entry, p);
     const fn = asRecord(call["function"], `${p}.function`);
-    const args = fn["arguments"];
-    if (typeof args !== "object" || args === null || Array.isArray(args)) {
-      throw decodeError(`${p}.function.arguments`, "expected an object");
+    const name = asString(fn["name"], `${p}.function.name`);
+
+    const repaired = repairAndValidate(fn["arguments"], schemas.get(name));
+    if (!repaired.ok) {
+      throw decodeError(`${p}.function.arguments`, `${repaired.detail}`);
     }
     return {
       id: asString(call["id"], `${p}.id`),
-      name: asString(fn["name"], `${p}.function.name`),
-      arguments: args as Record<string, unknown>,
+      name,
+      arguments: repaired.args,
     };
   });
 }
@@ -138,6 +149,12 @@ export function decodeOpenAiRequest(body: unknown): IRRequest {
   const model = asString(root["model"], "model");
   const rawMessages = asArray(root["messages"], "messages");
   if (rawMessages.length === 0) throw decodeError("messages", "must not be empty");
+
+  // The declared schemas, so a repaired call is validated against the contract
+  // the CALLER specified rather than merely against "is it an object".
+  // Declared before the message loop because an assistant turn can carry tool
+  // calls that need it.
+  const toolSchemas = new Map<string, Record<string, unknown>>();
 
   const messages: IRMessage[] = [];
   for (const [i, entry] of rawMessages.entries()) {
@@ -168,7 +185,7 @@ export function decodeOpenAiRequest(body: unknown): IRRequest {
         if (name !== undefined) message.name = name;
       }
       if (role === "assistant" && Array.isArray(msg["tool_calls"])) {
-        message.tool_calls = decodeToolCalls(msg["tool_calls"], `${p}.tool_calls`);
+        message.tool_calls = decodeToolCalls(msg["tool_calls"], `${p}.tool_calls`, toolSchemas);
       }
       messages.push(message);
       continue;
@@ -212,6 +229,7 @@ export function decodeOpenAiRequest(body: unknown): IRRequest {
         description: optionalString(fn["description"], `${p}.function.description`) ?? "",
         input_schema: asRecord(fn["parameters"], `${p}.function.parameters`),
       };
+      toolSchemas.set(def.name, def.input_schema);
       return def;
     });
   }

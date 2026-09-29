@@ -13,6 +13,7 @@
  *   GenericClient     — Bearer or none; /v1/models auto-discovery attempt
  */
 import { NanitesError } from "../helpers/errors.js";
+import { repairToolArgumentsValue } from "../helpers/toolCallRepair.js";
 import { mapFetchError, mapHttpStatus } from "./errors.js";
 import type {
   ChatMessage,
@@ -110,18 +111,18 @@ function parseToolCalls(raw: unknown): ChatToolCall[] | undefined {
     const name = typeof fnObj.name === "string" ? fnObj.name : "";
     const id = typeof o.id === "string" ? o.id : "";
     if (!name || !id) continue;
-    let args: Record<string, unknown> = {};
-    if (typeof fnObj.arguments === "string") {
-      try {
-        const parsed = JSON.parse(fnObj.arguments) as unknown;
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-          args = parsed as Record<string, unknown>;
-        }
-      } catch {
-        // malformed arguments JSON — keep {} so the call still reaches the loop
-      }
-    }
-    calls.push({ id, name, arguments: args });
+    // Repair rather than give up. The old behaviour — malformed arguments
+    // become {} and the call still reaches the loop — was the worst outcome
+    // available: a write_file with no path, a search_files matching nothing,
+    // or a crash inside the tool, with nothing in the response saying the
+    // model's intent was discarded.
+    //
+    // An UNREPAIRABLE call is DROPPED here rather than executed with empty
+    // arguments. Dropping is visible — the model gets no answer and the loop
+    // sees no call — whereas executing it silently does the wrong thing.
+    const repaired = repairToolArgumentsValue(fnObj.arguments);
+    if (!repaired.ok) continue;
+    calls.push({ id, name, arguments: repaired.args });
   }
   return calls.length > 0 ? calls : undefined;
 }

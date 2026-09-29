@@ -151,24 +151,20 @@ describe("chat() parses OpenAI tool_calls", () => {
     }
   });
 
-  it("malformed tool-call arguments degrade to {} instead of crashing", async () => {
+  it("malformed tool-call arguments are REPAIRED, never degraded to {}", async () => {
+    // This test used to assert the opposite: that malformed arguments become
+    // {} and the call STILL reaches the loop. That was the bug — a read_file
+    // with no path, a write_file with no content, with nothing in the response
+    // saying the model's intent was discarded. Repairing is the fix.
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () => ({
-      ok: true,
-      status: 200,
-      headers: new Headers(),
+      ok: true, status: 200, headers: new Headers(),
       json: async () => ({
-        choices: [
-          {
-            message: {
-              role: "assistant",
-              content: "oops",
-              tool_calls: [
-                { id: "c1", type: "function", function: { name: "read_file", arguments: "{not json" } },
-              ],
-            },
-          },
-        ],
+        choices: [{ message: { role: "assistant", content: "",
+          tool_calls: [{ id: "c1", type: "function", function: { name: "read_file",
+            // Wrapped in prose, with a trailing comma: two common malformations
+            // that the deterministic ladder handles.
+            arguments: 'Here you go: {"path":"seed.txt","limit":10,}' } }] } }],
       }),
     })) as typeof fetch;
 
@@ -176,12 +172,37 @@ describe("chat() parses OpenAI tool_calls", () => {
       const client = new GenericClient("http://127.0.0.1:1234/v1");
       const resp = await client.chat({ model: "m", messages: [{ role: "user", content: "hi" }] }, "k");
       expect(resp.tool_calls).toHaveLength(1);
-      expect(resp.tool_calls![0]!.arguments).toEqual({});
+      // The model's ACTUAL intent survives.
+      expect(resp.tool_calls![0]!.arguments).toEqual({ path: "seed.txt", limit: 10 });
     } finally {
       globalThis.fetch = originalFetch;
     }
   });
 
+  it("an UNREPAIRABLE tool call is dropped, not executed with empty arguments", async () => {
+    // The complementary half. Dropping is visible — the model gets no answer
+    // and the loop sees no call — whereas executing with {} does the wrong
+    // thing silently. A truncated value cannot be recovered without inventing
+    // its content, so refusing is the only safe outcome.
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => ({
+      ok: true, status: 200, headers: new Headers(),
+      json: async () => ({
+        choices: [{ message: { role: "assistant", content: "",
+          tool_calls: [{ id: "c1", type: "function", function: { name: "write_file",
+            arguments: '{"path":"/tmp/x.txt","content":"half a fi' } }] } }],
+      }),
+    })) as typeof fetch;
+
+    try {
+      const client = new GenericClient("http://127.0.0.1:1234/v1");
+      const resp = await client.chat({ model: "m", messages: [{ role: "user", content: "hi" }] }, "k");
+      // No call reaches the loop at all.
+      expect(resp.tool_calls ?? []).toHaveLength(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
   it("serializeChatRequest maps assistant tool_calls to OpenAI wire shape", () => {
     // Regression: Cloudflare's strict OpenAI-compat validator rejects the
     // replayed assistant turn unless tool_calls carry {id, type, function}.

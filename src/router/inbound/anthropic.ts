@@ -40,6 +40,7 @@ import {
   optionalNumber,
   optionalString,
 } from "./decodeError.js";
+import { repairAndValidate } from "../../helpers/toolCallRepair.js";
 import type {
   IRContentPart,
   IRMessage,
@@ -54,7 +55,7 @@ import type {
 /** Anthropic requires max_tokens on every request. */
 const ANTHROPIC_DEFAULT_MAX_TOKENS = 4096;
 
-function decodeContentBlocks(raw: unknown, path: string): {
+function decodeContentBlocks(raw: unknown, path: string, schemas: Map<string, Record<string, unknown>>): {
   parts: IRContentPart[];
   thinking: IRThinkingBlock[];
   toolCalls: IRToolCall[];
@@ -105,17 +106,13 @@ function decodeContentBlocks(raw: unknown, path: string): {
       }
 
       case "tool_use": {
-        const input = block["input"];
-        // The IR requires an object. A non-object here means the caller sent
-        // something Anthropic would itself reject; fail rather than coerce.
-        if (typeof input !== "object" || input === null || Array.isArray(input)) {
-          throw decodeError(`${p}.input`, "expected an object");
-        }
-        toolCalls.push({
-          id: asString(block["id"], `${p}.id`),
-          name: asString(block["name"], `${p}.name`),
-          arguments: input as Record<string, unknown>,
-        });
+        // Repaired and schema-validated at the IR boundary, exactly as on the
+        // OpenAI side. A call that cannot be repaired is a decode error —
+        // never a call with empty arguments.
+        const name = asString(block["name"], `${p}.name`);
+        const repaired = repairAndValidate(block["input"], schemas.get(name));
+        if (!repaired.ok) throw decodeError(`${p}.input`, repaired.detail);
+        toolCalls.push({ id: asString(block["id"], `${p}.id`), name, arguments: repaired.args });
         break;
       }
 
@@ -182,6 +179,11 @@ export function decodeAnthropicRequest(body: unknown): IRRequest {
   const rawMessages = asArray(root["messages"], "messages");
   if (rawMessages.length === 0) throw decodeError("messages", "must not be empty");
 
+  // Declared schemas, so a repaired call is validated against the contract the
+  // CALLER specified. Before the message loop, because an assistant turn can
+  // carry tool calls that need it.
+  const schemas = new Map<string, Record<string, unknown>>();
+
   const messages: IRMessage[] = [];
   for (const [i, entry] of rawMessages.entries()) {
     const p = `messages[${i}]`;
@@ -196,7 +198,7 @@ export function decodeAnthropicRequest(body: unknown): IRRequest {
         messages.push(message);
         continue;
       }
-      const { parts, thinking, toolCalls, toolResults } = decodeContentBlocks(rawContent, `${p}.content`);
+      const { parts, thinking, toolCalls, toolResults } = decodeContentBlocks(rawContent, `${p}.content`, schemas);
       const message: IRMessage = { role, content: parts };
       if (thinking.length) message.thinking = thinking;
       if (toolCalls.length) message.tool_calls = toolCalls;
@@ -223,7 +225,7 @@ export function decodeAnthropicRequest(body: unknown): IRRequest {
       const rawContent = msg["content"];
       const text = typeof rawContent === "string"
         ? rawContent
-        : decodeContentBlocks(rawContent, `${p}.content`).parts
+        : decodeContentBlocks(rawContent, `${p}.content`, schemas).parts
             .filter((x): x is { type: "text"; text: string } => x.type === "text")
             .map((x) => x.text)
             .join("");
@@ -260,6 +262,7 @@ export function decodeAnthropicRequest(body: unknown): IRRequest {
         description: optionalString(tool["description"], `${p}.description`) ?? "",
         input_schema: asRecord(tool["input_schema"], `${p}.input_schema`),
       };
+      schemas.set(def.name, def.input_schema);
       return def;
     });
   }
