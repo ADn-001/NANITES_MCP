@@ -13,6 +13,7 @@ import { ProviderModelStore } from "../../storage/providerModelStore.js";
 import { ProviderKeyStore } from "../../storage/providerKeyStore.js";
 import type { ProviderKind } from "../../storage/profileDefaults.js";
 import { ROUTER_PROFILE } from "../constants.js";
+import { getAdvertised } from "../models/catalog.js";
 
 export interface ResolvedTarget {
   provider: ProviderKind;
@@ -45,6 +46,19 @@ export function resolveTarget(db: DatabaseSync, model: string): ResolvedTarget {
       message: "model is required",
       retryable: false,
     });
+  }
+
+  // 0. An ADVERTISED alias. Checked FIRST, and it is what makes a
+  //    harness-safe name work: the harness sends `nanites-flash` and it
+  //    resolves to the real namespaced id behind it.
+  const advertised = getAdvertised(db, id);
+  if (advertised) {
+    return {
+      provider: advertised.provider as ProviderKind,
+      endpoint: null,
+      model_id: advertised.real_id,
+      stored_id: advertised.real_id,
+    };
   }
 
   // 1. Already namespaced: `provider:model` or `generic:<endpoint>:model`.

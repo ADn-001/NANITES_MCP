@@ -20,6 +20,8 @@ import { NanitesError } from "../helpers/errors.js";
 import { decodeAnthropicRequest, encodeAnthropicResponse } from "./inbound/anthropic.js";
 import { decodeOpenAiRequest, encodeOpenAiResponse } from "./inbound/openai.js";
 import { resolveTarget, type ResolvedTarget } from "./outbound/resolve.js";
+import { listAdvertised, renderCatalog } from "./models/catalog.js";
+import { getAlias, walkChain, setStickyWinner, type ChainCandidate } from "./models/aliases.js";
 import { createSseWriter } from "./stream/sse.js";
 import { createAnthropicStream, type AnthropicStreamEncoder } from "./stream/anthropicStream.js";
 import { createOpenAiStream, type OpenAiStreamEncoder } from "./stream/openaiStream.js";
@@ -254,6 +256,51 @@ async function handleInference(
 
   const request = anthropicPath ? decodeAnthropicRequest(body) : decodeOpenAiRequest(body);
 
+  // An alias is a CHAIN, not a single target. Resolve it first; a bare
+  // advertised name or a namespaced id resolves to exactly one candidate and
+  // skips the walk.
+  const alias = request.model.includes(":") ? null : getAlias(opts.db, request.model);
+  if (alias) {
+    const startAt = alias.sticky_winner ?? 0;
+    try {
+      const walked = await walkChain(
+        alias.alias,
+        alias.candidates,
+        startAt,
+        async (candidate: ChainCandidate) => {
+          const resolved: ResolvedTarget = {
+            provider: candidate.provider as never,
+            endpoint: candidate.endpoint ?? null,
+            model_id: candidate.model_id,
+            stored_id: candidate.endpoint
+              ? `${candidate.provider}:${candidate.endpoint}:${candidate.model_id}`
+              : `${candidate.provider}:${candidate.model_id}`,
+          };
+          const hop: IRRequest = candidate.max_output_tokens
+            ? { ...request, max_output_tokens: candidate.max_output_tokens }
+            : request;
+          const out = await dispatchWithFailover({ db: opts.db, target: resolved, request: hop });
+          return { content: out.content, tool_calls: out.tool_calls };
+        },
+      );
+      setStickyWinner(opts.db, alias.alias, walked.winner);
+    } catch (err) {
+      const code = (err as { code?: string }).code ?? "chain_exhausted";
+      const message = (err as Error).message;
+      sendError(res, dialect, statusForCode(code), code, message);
+      return;
+    }
+    // The chain walker returns the raw answer shape; re-dispatch the winner so
+    // the caller gets the full response with usage and served_by.
+    const target = resolveTarget(opts.db, request.model);
+    const response = await dispatchWithFailover({ db: opts.db, target, request });
+    const payload = anthropicPath
+      ? encodeAnthropicResponse(response, `msg_${randomUUID()}`)
+      : encodeOpenAiResponse(response, `chatcmpl_${randomUUID()}`, Math.floor(Date.now() / 1000));
+    sendJson(res, 200, payload);
+    return;
+  }
+
   const target = resolveTarget(opts.db, request.model);
 
   if (request.stream) {
@@ -432,6 +479,15 @@ async function handle(
 
   if (req.method === "GET" && (pathname === "/v1/health" || pathname === "/v1/health/")) {
     sendJson(res, 200, buildHealth(opts, port, bind, startedAt));
+    return;
+  }
+
+  if (req.method === "GET" && (pathname === "/v1/models" || pathname === "/v1/models/")) {
+    // ONLY the advertised subset. A harness pings this on connect, and
+    // returning the whole consolidated provider catalog would fill its model
+    // picker with ids the operator never chose to expose.
+    const advertised = listAdvertised(opts.db);
+    sendJson(res, 200, renderCatalog(advertised, dialect));
     return;
   }
 
