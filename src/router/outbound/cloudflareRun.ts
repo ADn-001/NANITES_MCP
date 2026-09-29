@@ -229,8 +229,10 @@ async function classifyRunError(status: number, raw: string, model: CfModelDef):
     // Not a Workers AI envelope; the raw text is the message.
   }
 
-  // The measured Cloudflare codes, reusing the mapping the MCP router already
-  // has rather than inventing a second one.
+  // The measured Cloudflare codes are checked FIRST, because they are more
+  // specific than the HTTP status: a 400 carrying code 4006 is a QUOTA
+  // failure, not a shape rejection, and treating it as the latter would refuse
+  // to retry something that is genuinely worth retrying.
   if (cfCode === 4006) {
     return new NanitesError({ code: "provider_quota_exhausted", message, retryable: false });
   }
@@ -246,16 +248,22 @@ async function classifyRunError(status: number, raw: string, model: CfModelDef):
   if (status === 429) {
     return new NanitesError({ code: "provider_rate_limited", message, retryable: true });
   }
+
+  // 5xx is a TRANSIENT inference fault, and the status is checked BEFORE the
+  // shape branch below. A 500 carrying an unrecognised Cloudflare code used to
+  // fall through to `router_invalid_request` — a permanent-failure code for a
+  // fault that succeeds on retry, which is exactly backwards.
   if (status >= 500) {
     return new NanitesError({ code: "provider_server_error", message, retryable: true });
   }
-  // A shape rejection is a 400 and is NOT retryable on another candidate —
-  // the body is wrong for this model specifically.
+
+  // A 4xx with no recognised code is a shape rejection: the body is wrong for
+  // this model, and retrying the same body fails identically every time.
   return new NanitesError({
     code: "router_invalid_request",
     message: `Workers AI rejected the request for ${model.id}: ${message}`,
     retryable: false,
-    details: { model_id: model.id, category: model.category, status },
+    details: { model_id: model.id, category: model.category, status, cf_code: cfCode ?? null },
   });
 }
 

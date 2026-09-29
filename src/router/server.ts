@@ -28,6 +28,8 @@ import { createOpenAiStream, type OpenAiStreamEncoder } from "./stream/openaiStr
 import { openUpstreamStream, type OpenedUpstream } from "./outbound/streamDispatch.js";
 import { RateLimiter, DEFAULT_RATE_LIMIT } from "./security/rateLimit.js";
 import { startTunnel, type TunnelHandle } from "./transport/tunnel.js";
+import { JobStore, type JobRow } from "./jobs/store.js";
+import { runJob } from "./jobs/runner.js";
 import { needsRunPath, dispatchCfRun, toIRResponse } from "./outbound/cloudflareRun.js";
 import type { IRRequest } from "./ir/types.js";
 import { countTokens } from "../helpers/tokenize.js";
@@ -215,6 +217,37 @@ export function createRouterServer(opts: RouterServerOptions): http.Server {
       }
     });
   });
+}
+
+/** The public shape of a job. The stored request is never echoed back. */
+function publicJob(job: JobRow): Record<string, unknown> {
+  return {
+    job_id: job.job_id,
+    status: job.status,
+    phase: job.phase,
+    // null when the provider reports no progress, which is the common case.
+    progress: job.progress,
+    model: job.model,
+    source: job.source,
+    target: job.target,
+    artifact_uri: job.artifact_uri,
+    error: job.error,
+    created_at: job.created_at,
+    updated_at: job.updated_at,
+    completed_at: job.completed_at,
+  };
+}
+
+async function readBodyText(req: http.IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of req) {
+    const buf = chunk as Buffer;
+    total += buf.length;
+    if (total > MAX_BODY_BYTES) throw new Error("body_too_large");
+    chunks.push(buf);
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 /** Map a router/provider error code onto an HTTP status. */
@@ -566,6 +599,95 @@ async function handle(
   if (req.method === "GET" && (pathname === "/v1/health" || pathname === "/v1/health/")) {
     sendJson(res, 200, buildHealth(opts, port, bind, startedAt));
     return;
+  }
+
+  // ---- async generation jobs ----
+  if (pathname === "/v1/jobs" || pathname === "/v1/jobs/") {
+    const store = new JobStore(opts.db);
+    if (req.method === "POST") {
+      let body: { model?: string; body?: unknown; source?: string; target?: string };
+      try {
+        body = JSON.parse(await readBodyText(req)) as typeof body;
+      } catch {
+        sendError(res, dialect, 400, "router_invalid_request", "Body is not valid JSON.");
+        return;
+      }
+      if (!body?.model) {
+        sendError(res, dialect, 400, "router_invalid_request", "`model` is required.");
+        return;
+      }
+      if (!body.body || typeof body.body !== "object") {
+        sendError(res, dialect, 400, "router_invalid_request", "`body` is the request to run and is required.");
+        return;
+      }
+      // A job runs the SAME request the sync path would, so a caller can move
+      // from one to the other by wrapping the body — no second dialect to learn.
+      const job = store.create({
+        source: (body.source as never) ?? "text",
+        target: (body.target as never) ?? "image",
+        model: body.model,
+        request: { body: body.body, dialect },
+      });
+      // Fire and forget. The job row is the source of truth; the caller polls
+      // or subscribes.
+      const jobAbort = new AbortController();
+      void runJob({ db: opts.db, jobId: job.job_id, signal: jobAbort.signal })
+        .catch(() => undefined);
+      sendJson(res, 202, { job_id: job.job_id, status: job.status });
+      return;
+    }
+    if (req.method === "GET") {
+      sendJson(res, 200, { data: store.list().map(publicJob) });
+      return;
+    }
+  }
+
+  const jobMatch = /^\/v1\/jobs\/([A-Za-z0-9-]+)(\/events)?\/?$/.exec(pathname);
+  if (jobMatch) {
+    const store = new JobStore(opts.db);
+    const jobId = jobMatch[1]!;
+    const job = store.get(jobId);
+    if (!job) {
+      sendError(res, dialect, 404, "job_not_found", `No job ${jobId}.`);
+      return;
+    }
+    if (req.method === "DELETE" && !jobMatch[2]) {
+      sendJson(res, 200, { job_id: jobId, cancelled: store.cancel(jobId) });
+      return;
+    }
+    if (req.method === "GET" && jobMatch[2]) {
+      // SSE progress. Reuses the R2 writer; the frames are the same contract.
+      res.writeHead(200, {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-cache, no-transform",
+        connection: "keep-alive",
+        "x-accel-buffering": "no",
+      });
+      res.flushHeaders?.();
+      const writer = createSseWriter({ res, pingIntervalMs: 15_000 });
+      let last = "";
+      for (;;) {
+        const current = store.get(jobId);
+        if (!current) break;
+        const sig = `${current.status}:${current.phase}`;
+        if (sig !== last) {
+          last = sig;
+          await writer.data({ type: "job", job: publicJob(current) });
+        }
+        if (store.isTerminal(current.status)) {
+          await writer.data({ type: "job", job: publicJob(current) });
+          break;
+        }
+        if (writer.closed) break;
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      await writer.close();
+      return;
+    }
+    if (req.method === "GET") {
+      sendJson(res, 200, publicJob(job));
+      return;
+    }
   }
 
   if (req.method === "POST" && (pathname === "/v1/tunnel" || pathname === "/v1/tunnel/")) {
