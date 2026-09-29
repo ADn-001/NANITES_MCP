@@ -15,7 +15,8 @@
   ],
   "bin": {
     "nanites": "./dist/index.js",
-    "nanites-router": "./dist/router/main.js"
+    "nanites-router": "./dist/router/main.js",
+    "nanites-cli": "./dist/cli/main.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs && node scripts/copy-ui.mjs && node scripts/copy-skill.mjs && node scripts/copy-server.mjs",

@@ -113,6 +113,33 @@ Run `npm run build` first — `dist/index.js` does not exist until you do.
 
 ## Getting started
 
+### Standalone gateway (no coding harness)
+
+The router is a separate program and does not need Claude Code, or any other
+harness, to run. On a machine that has never seen one:
+
+```bash
+nanites-cli init                                     # create a profile, make it active
+export NANITES_API_KEY_CLOUDFLARE=...                # never pass a key in argv
+nanites-cli add-key cloudflare --account-id <id> --nickname work
+nanites-cli discover cloudflare                      # list the provider's catalog
+nanites-cli status                                   # what is configured, can it serve?
+
+NANITES_ROUTER_KEY=... nanites-router               # serves on :4800
+```
+
+`nanites-cli` never prompts — a blocking prompt cannot be scripted and an EOF on
+a pipe looks like an empty key. Missing input is an error naming the flag that
+fixes it. It is idempotent, and it never prints a secret.
+
+Discovery stores **candidates**; registering one is a separate, deliberate act.
+`status` reports both counts, because "65 discovered, 0 registered" is a normal
+starting state and not a failure.
+
+### With a coding harness
+
+Everything below assumes Claude Code (or another MCP client) is driving.
+
 ### 1. Create a profile
 
 A profile describes *your machine* — its VRAM, the LM Studio endpoint, pricing, and what
