@@ -10,7 +10,7 @@
  * '@modelcontextprotocol/server'. Installing as part of the build is what
  * makes `npm install && npm run build` sufficient to get a working plugin.
  */
-import { cpSync, existsSync, rmSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

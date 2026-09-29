@@ -20,7 +20,7 @@ import { NanitesError } from "../helpers/errors.js";
 import { decodeAnthropicRequest, encodeAnthropicResponse } from "./inbound/anthropic.js";
 import { decodeOpenAiRequest, encodeOpenAiResponse } from "./inbound/openai.js";
 import { resolveTarget, type ResolvedTarget } from "./outbound/resolve.js";
-import { listAdvertised, renderCatalog } from "./models/catalog.js";
+import { listAdvertised, renderCatalog, type AdvertisedModel } from "./models/catalog.js";
 import { getAlias, walkChain, setStickyWinner, type ChainCandidate } from "./models/aliases.js";
 import { createSseWriter } from "./stream/sse.js";
 import { createAnthropicStream, type AnthropicStreamEncoder } from "./stream/anthropicStream.js";
@@ -29,6 +29,7 @@ import { openUpstreamStream, type OpenedUpstream } from "./outbound/streamDispat
 import { RateLimiter, DEFAULT_RATE_LIMIT } from "./security/rateLimit.js";
 import { startTunnel, type TunnelHandle } from "./transport/tunnel.js";
 import { JobStore, type JobRow } from "./jobs/store.js";
+import { helperStatus, warmHelpers, classifyReply } from "./helpers/registry.js";
 import { runJob } from "./jobs/runner.js";
 import { needsRunPath, dispatchCfRun, toIRResponse } from "./outbound/cloudflareRun.js";
 import type { IRRequest } from "./ir/types.js";
@@ -135,7 +136,7 @@ async function readJsonBody(req: http.IncomingMessage): Promise<unknown> {
   }
 }
 
-interface HealthPayload {
+interface HealthPayloadShape {
   status: "ok";
   port: number;
   bind: string;
@@ -145,7 +146,7 @@ interface HealthPayload {
   advertised: number;
   aliases: number;
   tunnel: { enabled: boolean; url: string | null; running: boolean };
-  helpers: { needle: boolean; laya: boolean };
+  helpers: { needle: boolean; laya: boolean; detail?: { needle: string; laya: string } };
   uptime_s: number;
 }
 
@@ -171,9 +172,17 @@ function providerKeyCounts(db: DatabaseSync): Array<{ provider: string; keys: nu
   }
 }
 
-function buildHealth(opts: RouterServerOptions, port: number, bind: string, startedAt: number): HealthPayload {
+function buildHealth(opts: RouterServerOptions, port: number, bind: string, startedAt: number): HealthPayloadShape {
+  // Real availability, read from the registry. An injected override exists for
+  // tests, and the `detail` carries WHY a helper is unavailable — "not
+  // installed" and "installed but broken" need different fixes.
+  const status = helperStatus(opts.db);
+  const helpers = {
+    needle: opts.helperStatus?.().needle ?? status.needle.available,
+    laya: opts.helperStatus?.().laya ?? status.laya.available,
+    detail: { needle: status.needle.reason, laya: status.laya.reason },
+  };
   const config = readConfig(opts.db);
-  const helpers = opts.helperStatus?.() ?? { needle: false, laya: false };
   return {
     status: "ok",
     port,
@@ -186,6 +195,7 @@ function buildHealth(opts: RouterServerOptions, port: number, bind: string, star
     providers: providerKeyCounts(opts.db),
     advertised: countRows(opts.db, "SELECT COUNT(*) AS n FROM router_advertised"),
     aliases: countRows(opts.db, "SELECT COUNT(*) AS n FROM router_aliases"),
+    helpers,
     tunnel: {
       enabled: Boolean(opts.tunnel?.running ?? config?.tunnel_enabled),
       url: opts.tunnel?.url ?? config?.tunnel_url ?? null,
@@ -193,7 +203,7 @@ function buildHealth(opts: RouterServerOptions, port: number, bind: string, star
       // anything that has the key, and a pid is more than a caller needs.
       running: Boolean(opts.tunnel?.running),
     },
-    helpers,
+
     uptime_s: Math.floor((Date.now() - startedAt) / 1000),
   };
 }
@@ -720,7 +730,24 @@ async function handle(
     // returning the whole consolidated provider catalog would fill its model
     // picker with ids the operator never chose to expose.
     const advertised = listAdvertised(opts.db);
-    sendJson(res, 200, renderCatalog(advertised, dialect));
+    const hStatus = helperStatus(opts.db);
+    // Helpers are advertised ONLY when actually available. A model listed here
+    // that turns out to be missing produces a request-time failure, which is
+    // the exact confusion an advertised catalog exists to prevent.
+    const helperModels: AdvertisedModel[] = [];
+    if (hStatus.needle.available) {
+      helperModels.push({
+        alias: "nanites-needle-embed", real_id: "helper:needle3:embed", provider: "helper",
+        modalities: ["text"], context_window: null, created_at: new Date(0).toISOString(),
+      });
+    }
+    if (hStatus.laya.available) {
+      helperModels.push({
+        alias: "nanites-laya-classify", real_id: "helper:laya:classify", provider: "helper",
+        modalities: ["text"], context_window: 512, created_at: new Date(0).toISOString(),
+      });
+    }
+    sendJson(res, 200, renderCatalog([...advertised, ...helperModels], dialect));
     return;
   }
 
@@ -744,6 +771,7 @@ async function handle(
 }
 
 export async function startRouterServer(opts: RouterServerOptions): Promise<RouterServerHandle> {
+
   const port = opts.port ?? DEFAULT_ROUTER_PORT;
   const bind = opts.bind ?? DEFAULT_ROUTER_BIND;
   const server = createRouterServer(opts);
@@ -759,6 +787,19 @@ export async function startRouterServer(opts: RouterServerOptions): Promise<Rout
 
   const addr = server.address();
   const actualPort = typeof addr === "object" && addr ? addr.port : port;
+
+  // Probing spawns a subprocess, so it must not delay the listener. The timer
+  // is CLEARED on close: a probe that outlived a closed database threw
+  // "database is not open" as an unhandled rejection, once per test run.
+  const warm = setTimeout(() => {
+    try {
+      warmHelpers(opts.db);
+    } catch {
+      // A helper that cannot warm is simply unavailable.
+    }
+  }, 0);
+  warm.unref?.();
+  server.once("close", () => clearTimeout(warm));
 
   // Write the RESOLVED port back into the options the request closure captured.
   // Port 0 asks the OS for an ephemeral port, so the configured value and the

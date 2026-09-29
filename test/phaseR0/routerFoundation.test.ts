@@ -306,7 +306,11 @@ describe("R0.4 — the server", () => {
     expect(body.bind).toBe("127.0.0.1");
     expect(body.broadcast).toBe(false);
     expect(body.key_present).toBe(true);
-    expect(body.helpers).toEqual({ needle: false, laya: false });
+    // `detail` carries WHY a helper is unavailable, which is the difference
+    // between "not installed" and "installed but broken".
+    expect(body.helpers.needle).toBe(false);
+    expect(body.helpers.laya).toBe(false);
+    expect(body.helpers.detail).toBeTruthy();
   });
 
   it("rejects a WRONG key in the OpenAI shape", async () => {
