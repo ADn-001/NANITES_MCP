@@ -69,8 +69,15 @@ export function buildRunBody(model: CfModelDef, request: IRRequest, audioB64?: s
 
     case "text-to-image": {
       body["prompt"] = text;
-      const opts = (request as { image_options?: Record<string, unknown> }).image_options;
-      if (opts) Object.assign(body, opts);
+      // Only the parameters THIS model accepts. Probed: flux-1-schnell takes
+      // `prompt` alone and 400s on any other documented parameter, so
+      // forwarding whatever the caller supplied would fail the request rather
+      // than tune it.
+      const allowed = new Set(model.params ?? []);
+      const opts = (request as { image_options?: Record<string, unknown> }).image_options ?? {};
+      for (const [k, v] of Object.entries(opts)) {
+        if (allowed.has(k)) body[k] = v;
+      }
       return body;
     }
 
@@ -164,6 +171,52 @@ export async function decodeRunResponse(res: Response, model: CfModelDef, latenc
       });
     }
     const result = parsed["result"];
+
+    if (result && typeof result === "object" && !Array.isArray(result)) {
+      const obj = result as Record<string, unknown>;
+
+      // FLUX returns { result: { image: "<base64 png>" } } as JSON, NOT as an
+      // image/png body. Probed: Content-Type is application/json here, so the
+      // binary branch above never sees it, and a naive decode would hand the
+      // caller a JSON blob where an image belongs.
+      const image = obj["image"];
+      if (typeof image === "string" && image.length > 0) {
+        return {
+          text: null,
+          artifact: { kind: "image", b64: image, mime: "image/png", bytes: fromBase64(image).byteLength },
+          finish_reason: "stop",
+          latency_ms: latencyMs,
+        };
+      }
+
+      // MeloTTS returns base64 WAV INSIDE the JSON envelope, not as an
+      // audio/wav body — the opposite of Deepgram Aura, which returns real
+      // audio bytes and never reaches this branch. Probed.
+      const audio = obj["audio"];
+      if (typeof audio === "string" && audio.length > 0) {
+        return {
+          text: null,
+          artifact: { kind: "audio", b64: audio, mime: "audio/wav", bytes: fromBase64(audio).byteLength },
+          finish_reason: "stop",
+          latency_ms: latencyMs,
+        };
+      }
+
+      // text-generation nests a FULL OpenAI chat-completion object inside
+      // `result`, with the answer at result.response. Returning
+      // JSON.stringify(result) would put an entire completion envelope in the
+      // model's text field, which is worse than useless to a caller. Probed.
+      const response = obj["response"];
+      if (typeof response === "string") {
+        return { text: response, artifact: null, finish_reason: "stop", latency_ms: latencyMs };
+      }
+      // A VQA model returns { description: "..." } instead.
+      const description = obj["description"];
+      if (typeof description === "string") {
+        return { text: description, artifact: null, finish_reason: "stop", latency_ms: latencyMs };
+      }
+    }
+
     if (typeof result === "string") {
       return { text: result, artifact: null, finish_reason: "stop", latency_ms: latencyMs };
     }

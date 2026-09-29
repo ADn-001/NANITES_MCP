@@ -35,6 +35,27 @@ export interface CfModelDef {
   category: CfCategory;
   /** "multipart" models need FormData, not JSON, even for a text-only prompt. */
   format: "json" | "multipart";
+  /**
+   * The parameters this model actually accepts beyond `prompt`.
+   *
+   * PROBED against live Workers AI on 2026-09-29, not read from docs — and the
+   * docs are wrong. `flux-1-schnell` documents `num_steps`, `width`,
+   * `height`, `guidance` and `seed`; it accepts `prompt` and NOTHING else, and
+   * returns "Additional or unevaluated properties '/num_steps'" for each one
+   * sent. Sending a documented-but-unsupported parameter is a 400, not a
+   * silent no-op, so the accepted set has to be per-model.
+   *
+   * Absent = `prompt` only.
+   */
+  params?: string[];
+  /**
+   * Set when the request shape could NOT be confirmed against the live API.
+   *
+   * A planner must not offer an unverified model for a modality: guessing a
+   * body shape produces a confident-looking 400 at request time instead of an
+   * honest "unsupported here".
+   */
+  unverified?: boolean;
   acceptsImage: boolean;
   acceptsText: boolean;
   acceptsAudio: boolean;
@@ -77,7 +98,7 @@ export const CF_MODELS: CfModelDef[] = [
   { id: "@cf/moonshot/kimi-k2.6", category: "text-generation", format: "json", acceptsImage: true, acceptsText: true, acceptsAudio: false, returnsImage: false, returnsAudio: false, returnsText: true, deprecated: false, description: "Kimi K2.6 1T 262K vision" },
   { id: "@cf/moonshot/kimi-k2.7-code", category: "text-generation", format: "json", acceptsImage: true, acceptsText: true, acceptsAudio: false, returnsImage: false, returnsAudio: false, returnsText: true, deprecated: false, description: "Kimi K2.7 Code 1T agentic" },
   { id: "@cf/defog/sqlcoder-7b-2", category: "text-generation", format: "json", acceptsImage: false, acceptsText: true, acceptsAudio: false, returnsImage: false, returnsAudio: false, returnsText: true, deprecated: true, description: "SQLCoder 7B SQL gen (deprecated)" },
-  { id: "@cf/black-forest-labs/flux-1-schnell", category: "text-to-image", format: "json", acceptsImage: false, acceptsText: true, acceptsAudio: false, returnsImage: true, returnsAudio: false, returnsText: false, deprecated: false, description: "FLUX.1 schnell 12B" },
+  { id: "@cf/black-forest-labs/flux-1-schnell", category: "text-to-image", format: "json", params: [], acceptsImage: false, acceptsText: true, acceptsAudio: false, returnsImage: true, returnsAudio: false, returnsText: false, deprecated: false, description: "FLUX.1 schnell 12B" },
   { id: "@cf/stabilityai/stable-diffusion-xl-base-1.0", category: "text-to-image", format: "json", acceptsImage: true, acceptsText: true, acceptsAudio: false, returnsImage: true, returnsAudio: false, returnsText: false, deprecated: false, description: "SDXL Base 1.0" },
   { id: "@cf/bytedance/stable-diffusion-xl-lightning", category: "text-to-image", format: "json", acceptsImage: true, acceptsText: true, acceptsAudio: false, returnsImage: true, returnsAudio: false, returnsText: false, deprecated: false, description: "SDXL Lightning fast" },
   { id: "@cf/lykon/dreamshaper-8-lcm", category: "text-to-image", format: "json", acceptsImage: true, acceptsText: true, acceptsAudio: false, returnsImage: true, returnsAudio: false, returnsText: false, deprecated: false, description: "DreamShaper 8 LCM photorealistic" },
@@ -94,8 +115,8 @@ export const CF_MODELS: CfModelDef[] = [
   { id: "@cf/deepgram/aura-1", category: "text-to-speech", format: "json", acceptsImage: false, acceptsText: true, acceptsAudio: false, returnsImage: false, returnsAudio: true, returnsText: false, deprecated: false, description: "Deepgram Aura TTS" },
   { id: "@cf/deepgram/aura-2-en", category: "text-to-speech", format: "json", acceptsImage: false, acceptsText: true, acceptsAudio: false, returnsImage: false, returnsAudio: true, returnsText: false, deprecated: false, description: "Deepgram Aura-2 English" },
   { id: "@cf/deepgram/aura-2-es", category: "text-to-speech", format: "json", acceptsImage: false, acceptsText: true, acceptsAudio: false, returnsImage: false, returnsAudio: true, returnsText: false, deprecated: false, description: "Deepgram Aura-2 Spanish" },
-  { id: "@cf/deepgram/nova-3", category: "speech-recognition", format: "json", acceptsImage: false, acceptsText: false, acceptsAudio: true, returnsImage: false, returnsAudio: false, returnsText: true, deprecated: false, description: "Deepgram Nova-3 STT" },
-  { id: "@cf/deepgram/flux", category: "speech-recognition", format: "json", acceptsImage: false, acceptsText: false, acceptsAudio: true, returnsImage: false, returnsAudio: false, returnsText: true, deprecated: false, description: "Deepgram Flux conversational STT" },
+  { id: "@cf/deepgram/nova-3", category: "speech-recognition", format: "json", unverified: true, acceptsImage: false, acceptsText: false, acceptsAudio: true, returnsImage: false, returnsAudio: false, returnsText: true, deprecated: false, description: "Deepgram Nova-3 STT" },
+  { id: "@cf/deepgram/flux", category: "speech-recognition", format: "json", unverified: true, acceptsImage: false, acceptsText: false, acceptsAudio: true, returnsImage: false, returnsAudio: false, returnsText: true, deprecated: false, description: "Deepgram Flux conversational STT" },
 ];
 
 const BY_ID = new Map(CF_MODELS.map((m) => [m.id, m]));

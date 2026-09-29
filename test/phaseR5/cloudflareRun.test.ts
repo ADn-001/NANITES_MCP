@@ -149,12 +149,27 @@ describe("request shaping per category", () => {
     expect(body["prompt"]).toBe("what is this");
   });
 
-  it("text-to-image sends a prompt and the image options", () => {
+  it("text-to-image sends ONLY the parameters the model accepts", () => {
+    // PROBED 2026-09-29: flux-1-schnell documents num_steps/width/height/
+    // guidance/seed but accepts `prompt` ALONE, and answers "Additional or
+    // unevaluated properties '/num_steps'" for each one sent. Forwarding what
+    // the caller asked for would 400 the request instead of tuning it.
     const model = findCfModel("@cf/black-forest-labs/flux-1-schnell")!;
+    expect(model.params).toEqual([]);
     const body = buildRunBody(model, req({ image_options: { width: 512, height: 512, num_steps: 4 } } as never));
     expect(body["prompt"]).toBe("hello");
+    expect(body["width"]).toBeUndefined();
+    expect(body["num_steps"]).toBeUndefined();
+  });
+
+  it("text-to-image DOES forward params a model declares it accepts", () => {
+    // The filter must not be a blanket "drop everything" — a model with an
+    // explicit params list gets them.
+    const model = { ...findCfModel("@cf/black-forest-labs/flux-1-schnell")!, params: ["width", "height"] };
+    const body = buildRunBody(model, req({ image_options: { width: 512, height: 512, num_steps: 4 } } as never));
     expect(body["width"]).toBe(512);
-    expect(body["num_steps"]).toBe(4);
+    expect(body["height"]).toBe(512);
+    expect(body["num_steps"]).toBeUndefined();
   });
 
   it("image-to-image sends image_b64, which IS base64 here", () => {
@@ -182,6 +197,16 @@ describe("request shaping per category", () => {
     expect(auraBody["prompt"]).toBeUndefined();
   });
 
+  it("marks ASR as UNVERIFIED, because the documented shape was rejected", () => {
+    // PROBED 2026-09-29: nova-3 documents { audio: number[] }. It rejected
+    // that, and then rejected { audio: { body, contentType } } while its own
+    // error demanded exactly that shape. The request body could not be
+    // confirmed, so the model is flagged and the planner skips it rather than
+    // offering a modality that 400s on use.
+    const nova = findCfModel("@cf/deepgram/nova-3")!;
+    expect(nova.unverified).toBe(true);
+  });
+
   it("speech-recognition sends audio as a raw byte array", () => {
     const model = findCfModel("@cf/deepgram/nova-3")!;
     const body = buildRunBody(model, req(), "QUJD");
@@ -200,6 +225,47 @@ describe("response decoding", () => {
   function res(contentType: string, body: string | Uint8Array): Response {
     return new Response(body as BodyInit, { headers: { "content-type": contentType } });
   }
+
+  it("unwraps a NESTED OpenAI completion from a text-generation model", async () => {
+    // PROBED: Cloudflare nests a full chat-completion object inside `result`,
+    // with the answer at result.response. Returning JSON.stringify(result)
+    // would put an entire completion envelope into the model's text field.
+    const inner = { id: "c1", choices: [{ message: { content: "OK" } }], response: "OK" };
+    const out = await decodeRunResponse(
+      res("application/json", JSON.stringify({ result: inner })),
+      findCfModel("@cf/meta/llama-3.3-70b-instruct-fp8-fast")!, 5);
+    expect(out.text).toBe("OK");
+    expect(out.text).not.toContain("choices");
+  });
+
+  it("unwraps a VQA model's { description } result", async () => {
+    // PROBED: llava returns { description: "..." }, not { response: "..." }.
+    const out = await decodeRunResponse(
+      res("application/json", JSON.stringify({ result: { description: "a black image" } })),
+      findCfModel("@cf/llava-hf/llava-1.5-7b-hf")!, 5);
+    expect(out.text).toBe("a black image");
+  });
+
+  it("decodes an image that arrives as base64 INSIDE the JSON envelope", async () => {
+    // PROBED: FLUX returns Content-Type application/json with
+    // { result: { image: "<b64>" } }, NOT an image/png body — so the binary
+    // branch never sees it and a naive decode returns a JSON blob.
+    const body = JSON.stringify({ result: { image: pngB64 } });
+    const out = await decodeRunResponse(res("application/json", body), findCfModel("@cf/black-forest-labs/flux-1-schnell")!, 5);
+    expect(out.artifact?.kind).toBe("image");
+    expect(out.artifact?.bytes).toBe(PNG.length);
+    expect(Buffer.from(out.artifact!.b64, "base64").equals(PNG)).toBe(true);
+  });
+
+  it("decodes MeloTTS audio that arrives as base64 INSIDE the JSON envelope", async () => {
+    // PROBED: MeloTTS returns { result: { audio: "<b64 wav>" } } as JSON,
+    // the OPPOSITE of Deepgram Aura which returns real audio/mpeg bytes.
+    const out = await decodeRunResponse(
+      res("application/json", JSON.stringify({ result: { audio: pngB64 } })),
+      findCfModel("@cf/myshell-ai/melotts")!, 5);
+    expect(out.artifact?.kind).toBe("audio");
+    expect(out.artifact?.mime).toBe("audio/wav");
+  });
 
   it("decodes a { result } text envelope", async () => {
     const out = await decodeRunResponse(res("application/json", JSON.stringify({ result: "the answer" })), findCfModel("@cf/meta/llama-3.3-70b-instruct-fp8-fast")!, 5);
@@ -255,22 +321,29 @@ describe("capability population", () => {
     opened.push({ close });
 
     const store = new ProviderModelStore(db);
-    // Discovery "found" exactly these two.
+    // Discovery "found" these three.
     store.registerModel(ROUTER_PROFILE, "cloudflare", "@cf/black-forest-labs/flux-1-schnell");
+    store.registerModel(ROUTER_PROFILE, "cloudflare", "@cf/llava-hf/llava-1.5-7b-hf");
     store.registerModel(ROUTER_PROFILE, "cloudflare", "@cf/deepgram/nova-3");
 
-    const written = applyCfCapabilities(db);
-    expect(written).toBe(2);
+    // Two of the three get capabilities; nova-3 is UNVERIFIED (its documented
+    // body shape was rejected by the live API) so it is skipped rather than
+    // offered a modality that 400s on use.
+    expect(applyCfCapabilities(db)).toBe(2);
 
     const flux = store.getModel(ROUTER_PROFILE, "cloudflare", "@cf/black-forest-labs/flux-1-schnell")!;
     // An image model that emits nothing the router understands would be
     // invisible to the planner, so its output modality must be recorded.
     expect(flux.supported_modalities).toEqual(["image"]);
 
+    const llava = store.getModel(ROUTER_PROFILE, "cloudflare", "@cf/llava-hf/llava-1.5-7b-hf")!;
+    expect(llava.supported_modalities).toEqual(["text"]);
+    // The vision INPUT capability: nothing else populates this column.
+    expect(llava.capabilities.vision).toBe(true);
+
+    // The unverified model keeps only what discovery gave it.
     const nova = store.getModel(ROUTER_PROFILE, "cloudflare", "@cf/deepgram/nova-3")!;
     expect(nova.supported_modalities).toEqual(["text"]);
-    // Audio INPUT capability: nothing else populates this column.
-    expect(nova.capabilities.audio).toBe(true);
 
     // A registry model that discovery did NOT find gets no row at all.
     expect(store.getModel(ROUTER_PROFILE, "cloudflare", "@cf/moonshot/kimi-k2.6")).toBeNull();

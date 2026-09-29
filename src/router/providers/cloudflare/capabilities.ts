@@ -22,6 +22,11 @@ export function applyCfCapabilities(db: DatabaseSync): number {
 
   for (const def of CF_MODELS) {
     if (!present.has(def.id)) continue;
+    // An UNVERIFIED model gets no capability flags. Advertising a modality we
+    // could not confirm against the live API produces a 400 the operator only
+    // discovers by using it, which is exactly what the unknown-means-unknown
+    // rule exists to prevent.
+    if (def.unverified) continue;
     const existing = store.getModel(ROUTER_PROFILE, "cloudflare", def.id);
     if (!existing) continue;
 
