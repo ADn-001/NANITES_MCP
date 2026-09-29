@@ -10,6 +10,7 @@ import { openNanitesDb, type NanitesDb } from "../storage/db.js";
 import { ensureNanitesHome } from "../config/paths.js";
 import { resolveVirtualKey, readConfig, type RouterConfigRow } from "./auth.js";
 import { startRouterServer, DEFAULT_ROUTER_PORT, DEFAULT_ROUTER_BIND, type RouterServerHandle } from "./server.js";
+import { TUNNEL_OFF, type TunnelHandle, type TunnelState } from "./transport/tunnel.js";
 
 export interface RouterDeps {
   db: DatabaseSync;
@@ -25,6 +26,10 @@ export interface StartRouterOptions {
   port?: number;
   bind?: string;
   env?: NodeJS.ProcessEnv;
+  /** An already-running tunnel, for the control surface to report. */
+  tunnel?: TunnelHandle;
+  /** Injectable so tests can drive the clock instead of sleeping. */
+  rateLimiter?: unknown;
 }
 
 export function buildRouterDeps(home?: string, env: NodeJS.ProcessEnv = process.env): RouterDeps {
@@ -42,6 +47,8 @@ export function buildRouterDeps(home?: string, env: NodeJS.ProcessEnv = process.
 
 export interface StartedRouter extends RouterServerHandle {
   deps: RouterDeps;
+  /** Current tunnel state, or the off state when none is running. */
+  tunnelState(): TunnelState;
 }
 
 export async function startRouter(opts: StartRouterOptions = {}): Promise<StartedRouter> {
@@ -53,12 +60,33 @@ export async function startRouter(opts: StartRouterOptions = {}): Promise<Starte
   const port = opts.port ?? Number(env.NANITES_ROUTER_PORT ?? DEFAULT_ROUTER_PORT);
   const bind = opts.bind ?? (env.NANITES_ROUTER_BIND ?? DEFAULT_ROUTER_BIND);
 
+  // A live tunnel, if one was started. Optional rather than always-null so the
+  // control surface has something real to report; a caller that never starts
+  // one simply gets the off state.
+  const tunnel: TunnelHandle | undefined = opts.tunnel;
+
   const handle = await startRouterServer({
     db: deps.db,
     port: Number.isFinite(port) ? port : DEFAULT_ROUTER_PORT,
     bind,
     keyHash: deps.keyHash,
+    tunnel,
+    rateLimiter: opts.rateLimiter as never,
   });
 
-  return { ...handle, deps };
+  // A TunnelHandle carries a `stop` method, so it is read field by field
+  // rather than spread — spreading would fold the function into the state.
+  const tunnelState = (): TunnelState =>
+    tunnel
+      ? {
+          enabled: tunnel.enabled,
+          running: tunnel.running,
+          url: tunnel.url,
+          pid: tunnel.pid,
+          last_error: tunnel.last_error,
+          started_at: tunnel.started_at,
+        }
+      : TUNNEL_OFF;
+
+  return { ...handle, deps, tunnelState };
 }

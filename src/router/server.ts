@@ -11,7 +11,7 @@
  * the handler.
  */
 import http from "node:http";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { bearerToken, verifyVirtualKey, readConfig } from "./auth.js";
 import { detectDialect, errorFor, type Dialect } from "./dialect.js";
@@ -26,6 +26,8 @@ import { createSseWriter } from "./stream/sse.js";
 import { createAnthropicStream, type AnthropicStreamEncoder } from "./stream/anthropicStream.js";
 import { createOpenAiStream, type OpenAiStreamEncoder } from "./stream/openaiStream.js";
 import { openUpstreamStream, type OpenedUpstream } from "./outbound/streamDispatch.js";
+import { RateLimiter, DEFAULT_RATE_LIMIT } from "./security/rateLimit.js";
+import { startTunnel, type TunnelHandle } from "./transport/tunnel.js";
 import { needsRunPath, dispatchCfRun, toIRResponse } from "./outbound/cloudflareRun.js";
 import type { IRRequest } from "./ir/types.js";
 import { countTokens } from "../helpers/tokenize.js";
@@ -60,8 +62,28 @@ export const DEFAULT_ROUTER_BIND = "127.0.0.1";
  */
 export const MAX_BODY_BYTES = 8 * 1024 * 1024;
 
+/**
+ * One limiter per PROCESS, not per request. A per-request limiter would be
+ * discarded immediately and limit nothing.
+ */
+const rateLimiter = new RateLimiter(DEFAULT_RATE_LIMIT);
+
+/** Record a freshly-started tunnel on the server options, for /v1/health. */
+function attachTunnel(opts: RouterServerOptions, tunnel: TunnelHandle): void {
+  opts.tunnel = tunnel;
+}
+
+/** Drop rate-limit buckets that have been idle, so the map cannot grow forever. */
+export function sweepIdleRateLimitBuckets(idleMs?: number): number {
+  return rateLimiter.sweep(idleMs);
+}
+
 export interface RouterServerOptions {
   db: DatabaseSync;
+  /** Injectable so tests can drive the clock instead of sleeping. */
+  rateLimiter?: RateLimiter;
+  /** Live tunnel handle, when one is running. Null otherwise. */
+  tunnel?: TunnelHandle | null;
   port?: number;
   bind?: string;
   /** The stored hash every request is verified against. */
@@ -120,7 +142,7 @@ interface HealthPayload {
   providers: Array<{ provider: string; keys: number }>;
   advertised: number;
   aliases: number;
-  tunnel: { enabled: boolean; url: string | null };
+  tunnel: { enabled: boolean; url: string | null; running: boolean };
   helpers: { needle: boolean; laya: boolean };
   uptime_s: number;
 }
@@ -162,7 +184,13 @@ function buildHealth(opts: RouterServerOptions, port: number, bind: string, star
     providers: providerKeyCounts(opts.db),
     advertised: countRows(opts.db, "SELECT COUNT(*) AS n FROM router_advertised"),
     aliases: countRows(opts.db, "SELECT COUNT(*) AS n FROM router_aliases"),
-    tunnel: { enabled: Boolean(config?.tunnel_enabled), url: config?.tunnel_url ?? null },
+    tunnel: {
+      enabled: Boolean(opts.tunnel?.running ?? config?.tunnel_enabled),
+      url: opts.tunnel?.url ?? config?.tunnel_url ?? null,
+      // Never the pid or the error detail here: /v1/health is reachable by
+      // anything that has the key, and a pid is more than a caller needs.
+      running: Boolean(opts.tunnel?.running),
+    },
     helpers,
     uptime_s: Math.floor((Date.now() - startedAt) / 1000),
   };
@@ -492,7 +520,23 @@ async function handle(
     return;
   }
 
-  // 2. OUTBOUND GUARD — a stub for R0, but the seam is placed now so every
+  // 4. RATE LIMIT — after auth, so an unauthenticated flood cannot consume a
+  //    legitimate caller's budget, and before any body is read, so a rejected
+  //    request costs nothing.
+  //
+  //    Bucketed on a HASH of the key rather than the key itself. The limiter
+  //    lives in memory, and storing the presented secret as a map key would
+  //    put it in a heap dump.
+  const bucketKey = createHash("sha256").update(presented).digest("base64url");
+  const limit = (opts.rateLimiter ?? rateLimiter).take(bucketKey);
+  if (!limit.allowed) {
+    res.setHeader("retry-after", String(limit.retryAfterSeconds));
+    sendError(res, dialect, 429, "rate_limit_exceeded",
+      `Rate limit exceeded. Retry in ${limit.retryAfterSeconds}s.`);
+    return;
+  }
+
+  // 5. OUTBOUND GUARD — a stub for R0, but the seam is placed now so every
   //    handler added later is automatically behind it.
   const requestedUpstream = url.searchParams.get("upstream");
   if (requestedUpstream) {
@@ -503,7 +547,7 @@ async function handle(
     }
   }
 
-  // 3. ROUTES
+  // 6. ROUTES
   if (req.method === "POST" && (pathname === "/v1/messages" || pathname === "/v1/chat/completions")) {
     await handleInference(req, res, opts, dialect, pathname);
     return;
@@ -511,6 +555,31 @@ async function handle(
 
   if (req.method === "GET" && (pathname === "/v1/health" || pathname === "/v1/health/")) {
     sendJson(res, 200, buildHealth(opts, port, bind, startedAt));
+    return;
+  }
+
+  if (req.method === "POST" && (pathname === "/v1/tunnel" || pathname === "/v1/tunnel/")) {
+    // Control the tunnel from a harness. Requiring the virtual key is the
+    // point: a tunnel is a PUBLIC URL pointed at the user's provider spend, so
+    // turning one on is not an unauthenticated action.
+    // A tunnel already running means the answer is its URL, not a second
+    // tunnel. Starting another would leave the first one orphaned with a live
+    // public URL.
+    if (opts.tunnel?.running) {
+      sendJson(res, 200, { running: true, url: opts.tunnel.url, already: true });
+      return;
+    }
+    try {
+      const fresh = await startTunnel({ port, timeoutMs: 60_000 });
+      attachTunnel(opts, fresh);
+      sendJson(res, 200, { running: true, url: fresh.url });
+    } catch (err) {
+      const reason = (err as { reason?: string }).reason ?? "spawn_failed";
+      // A missing cloudflared is the NORMAL case and is a 501 "not
+      // implemented here", not a 500: the router itself is fine.
+      sendError(res, dialect, reason === "not_installed" ? 501 : 504,
+        "tunnel_unavailable", err instanceof Error ? err.message : String(err));
+    }
     return;
   }
 

@@ -13,7 +13,7 @@
  * keys are already configured there and are not re-entered here.
  */
 import { startRouter, type StartedRouter } from "./deps.js";
-import { DEFAULT_ROUTER_BIND, DEFAULT_ROUTER_PORT } from "./server.js";
+import { DEFAULT_ROUTER_BIND, DEFAULT_ROUTER_PORT, sweepIdleRateLimitBuckets } from "./server.js";
 
 function line(msg: string): void {
   process.stdout.write(`${msg}\n`);
@@ -44,11 +44,27 @@ export async function main(): Promise<void> {
     line("  set NANITES_ROUTER_KEY to supply your own instead of this one.");
   }
 
+  // Exposure warnings. A tunnelled or broadcast router is a PUBLIC endpoint
+  // with real provider spend behind it, and the virtual key is the only thing
+  // in between. Saying so at startup is the difference between a user who
+  // knows and one who finds out from a bill.
   if (bind !== DEFAULT_ROUTER_BIND && bind !== "localhost") {
     line("");
     line(`  WARNING: bound to ${bind}, so this endpoint is reachable off-host.`);
     line("  The virtual API key is the only thing protecting real provider spend.");
   }
+
+  if ((process.env.NANITES_ROUTER_TUNNEL ?? "0") === "1") {
+    line("");
+    line("  Tunnel requested. Start it with POST /v1/tunnel once this is up —");
+    line("  the URL is only usable after the edge is routing, so it is not");
+    line("  printed optimistically at boot.");
+  }
+
+  // Idle sweep so the rate limiter's bucket map cannot grow without bound on a
+  // long-lived process. unref'd: a sweep must never hold the process open.
+  const sweeper = setInterval(() => { sweepIdleRateLimitBuckets(); }, 300_000);
+  sweeper.unref?.();
 
   const shutdown = (signal: string): void => {
     line(`\nnanites-router: ${signal}, shutting down`);
