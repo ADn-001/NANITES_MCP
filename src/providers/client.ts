@@ -58,7 +58,7 @@ function extractXRequestId(headers: Headers): string | undefined {
 // `{success:false,errors:[...]}`) and as plain text. Parse to an object when
 // possible so mapHttpStatus's provider-specific branches actually engage —
 // passing a raw text blob made every structured message surface as JSON noise.
-async function readErrorBody(res: Response): Promise<unknown> {
+export async function readErrorBody(res: Response): Promise<unknown> {
   const text = await res.text().catch(() => "");
   try {
     return JSON.parse(text) as unknown;
@@ -231,7 +231,7 @@ export function parseChatResponse(raw: unknown): ChatResponse {
   };
 }
 
-async function* readSseLines(body: ReadableStream<Uint8Array>): AsyncGenerator<string> {
+export async function* readSseLines(body: ReadableStream<Uint8Array>): AsyncGenerator<string> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -305,6 +305,138 @@ async function reassembleStream(
     provider_request_id: providerRequestId,
     usage,
   };
+}
+
+// ---- NVIDIA NIM ----
+
+/**
+ * NVIDIA's hosted inference API. OpenAI-shaped in every respect that matters —
+ * `/models`, `/chat/completions`, Bearer auth — so this mirrors OpenRouterClient
+ * rather than inventing a dialect.
+ *
+ * Two deliberate differences from the other clients:
+ *  - NIM takes PLAIN OpenAI params, so unlike Cloudflare there is no
+ *    `reasoning_effort` special-casing to do.
+ *  - `account_id` is accepted and ignored, so a config that carries one does
+ *    not fail validation. It is not a NIM concept; Cloudflare is the only
+ *    provider that uses it, and it goes in a URL path there.
+ */
+export class NvidiaClient implements ProviderClient {
+  readonly provider: ProviderKind = "nvidia";
+  readonly baseUrl: string;
+
+  constructor(baseUrl = "https://integrate.api.nvidia.com/v1") {
+    this.baseUrl = baseUrl;
+  }
+
+  async listModels(key: string, _accountId?: string): Promise<ListModelsResponse> {
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}/models`, {
+        headers: { Authorization: `Bearer ${key}` },
+        signal: AbortSignal.timeout(15_000),
+      });
+    } catch (err) {
+      throw mapFetchError(err);
+    }
+    if (!res.ok) {
+      throw mapHttpStatus(res.status, await readErrorBody(res), "generic");
+    }
+    return { models: parseOpenAiModels(await res.json()) as RawProviderModel[] };
+  }
+
+  async chat(req: ChatRequest, key: string, _accountId?: string, gatewayUrl?: string): Promise<ChatResponse> {
+    const base = gatewayUrl ?? this.baseUrl;
+    let res: Response;
+    try {
+      res = await fetch(`${base}/chat/completions`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+        body: JSON.stringify(serializeChatRequest(req)),
+        signal: AbortSignal.timeout(240_000),
+      });
+    } catch (err) {
+      throw mapFetchError(err);
+    }
+    if (!res.ok) {
+      throw mapHttpStatus(res.status, await readErrorBody(res), "generic");
+    }
+    const json = await res.json() as {
+      id?: string;
+      choices?: Array<{ message?: { content?: string; reasoning_content?: string; reasoning?: unknown }; finish_reason?: string }>;
+      usage?: ChatResponse["usage"];
+    };
+    const choice = json.choices?.[0]?.message;
+    const reasoning = normalizeReasoning(choice?.reasoning);
+    const toolCalls = parseToolCalls((choice as { tool_calls?: unknown })?.tool_calls);
+    return {
+      content: choice?.content ?? "",
+      reasoning,
+      reasoning_content: choice?.reasoning_content ?? reasoning,
+      ...(toolCalls ? { tool_calls: toolCalls } : {}),
+      finish_reason: json.choices?.[0]?.finish_reason,
+      provider_request_id: extractXRequestId(res.headers) ?? json.id,
+      usage: json.usage,
+    };
+  }
+
+  async streamChat(
+    req: ChatRequest,
+    key: string,
+    _accountId?: string,
+    gatewayUrl?: string,
+    onEvent?: (event: ChatStreamEvent) => void,
+  ): Promise<ChatResponse> {
+    const base = gatewayUrl ?? this.baseUrl;
+    let res: Response;
+    try {
+      res = await fetch(`${base}/chat/completions`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+        body: JSON.stringify(serializeChatRequest({ ...req, stream: true })),
+        signal: AbortSignal.timeout(240_000),
+      });
+    } catch (err) {
+      throw mapFetchError(err);
+    }
+    if (!res.ok) {
+      throw mapHttpStatus(res.status, await readErrorBody(res), "generic");
+    }
+    if (!res.body) throw new NanitesError({ code: "truncated_stream", message: "stream had no body", retryable: true });
+
+    let content = "";
+    let reasoningContent: string | undefined;
+    let finishReason: string | undefined;
+    const lines = readSseLines(res.body);
+    for await (const raw of lines) {
+      if (raw === "[DONE]") continue;
+      let event: Record<string, unknown>;
+      try { event = JSON.parse(raw); } catch { continue; }
+      const choice = (event.choices as Array<Record<string, unknown>> | undefined)?.[0];
+      const delta = choice?.delta as Record<string, unknown> | undefined;
+      if (delta) {
+        if (typeof delta.content === "string" && delta.content) {
+          content += delta.content;
+          onEvent?.({ type: "content", delta: delta.content });
+        }
+        const r = normalizeReasoning(delta.reasoning)
+          ?? (typeof delta.reasoning_content === "string" ? delta.reasoning_content : undefined);
+        if (r) {
+          reasoningContent = (reasoningContent ?? "") + r;
+          onEvent?.({ type: "content", delta: r, reasoning_delta: r });
+        }
+      }
+      if (choice?.finish_reason) finishReason = String(choice.finish_reason);
+      onEvent?.({ type: "done", finish_reason: finishReason });
+    }
+    return { content, reasoning_content: reasoningContent, finish_reason: finishReason, provider_request_id: extractXRequestId(res.headers) };
+  }
+
+  mapError(err: unknown, httpStatus?: number): NanitesError {
+    if (err instanceof NanitesError) return err;
+    if (httpStatus) return mapHttpStatus(httpStatus, err, "generic");
+    return mapFetchError(err);
+  }
 }
 
 // ---- Cloudflare ----
@@ -867,6 +999,7 @@ export function createProviderClient(provider: ProviderKind, baseUrl?: string): 
   switch (provider) {
     case "cloudflare": return new CloudflareClient(baseUrl);
     case "openrouter": return new OpenRouterClient(baseUrl);
+    case "nvidia": return new NvidiaClient(baseUrl);
     case "omniroute": return new OmniRouteClient(baseUrl as string);
     case "generic": return new GenericClient(baseUrl as string);
     case "local": throw new Error("use LmStudioClient for local provider");
