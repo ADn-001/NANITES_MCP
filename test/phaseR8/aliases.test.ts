@@ -208,13 +208,13 @@ describe("POST /v1/broadcast", () => {
     expect(still).toBeTruthy();
   });
 
-  it("unadvertiseModel returns the alias it removed, and null when absent", async () => {
+  it("unadvertiseModel returns EVERY name it removed, and [] when absent", async () => {
     const h = await harness();
     await call(h, "POST", "/v1/broadcast", {
       provider: "cloudflare", model_id: MODELS[0], on: true, alias: "renamed",
     });
-    expect(unadvertiseModel(h.deps.db, MODELS[0]!, "cloudflare")).toBe("renamed");
-    expect(unadvertiseModel(h.deps.db, MODELS[0]!, "cloudflare")).toBeNull();
+    expect(unadvertiseModel(h.deps.db, MODELS[0]!, "cloudflare")).toEqual(["renamed"]);
+    expect(unadvertiseModel(h.deps.db, MODELS[0]!, "cloudflare")).toEqual([]);
   });
 });
 
@@ -257,5 +257,63 @@ describe("publishing under a model's own id", () => {
     });
     expect(off.body.removed).toBe(true);
     expect(listAdvertised(h.deps.db)).toHaveLength(0);
+  });
+});
+
+describe("the advertised list is the ONLY nomenclature a harness sees", () => {
+  // The point of the catalog: a harness reads /v1/models and can only offer
+  // what is there. Verified explicitly rather than assumed, because "only" is
+  // the whole claim.
+  it("never leaks a provider id or a namespaced id", async () => {
+    const h = await harness();
+    await call(h, "POST", "/v1/broadcast", {
+      provider: "cloudflare", model_id: MODELS[0], on: true, alias: "nanites-one",
+    });
+    const models = await call(h, "GET", "/v1/models");
+    for (const m of models.body.data) {
+      expect(String(m.id).startsWith("@cf/")).toBe(false);
+      expect(String(m.id).includes(":")).toBe(false);
+    }
+  });
+
+  it("advertises the chosen name, not the underlying model", async () => {
+    const h = await harness();
+    await call(h, "POST", "/v1/broadcast", {
+      provider: "cloudflare", model_id: MODELS[0], on: true, alias: "nanites-brand",
+    });
+    const models = await call(h, "GET", "/v1/models");
+    expect(models.body.data.map((m: any) => m.id)).toEqual(["nanites-brand"]);
+  });
+
+  it("removes a hidden model from the advertised list", async () => {
+    const h = await harness();
+    await call(h, "POST", "/v1/broadcast", {
+      provider: "cloudflare", model_id: MODELS[0], on: true, alias: "nanites-gone",
+    });
+    expect((await call(h, "GET", "/v1/models")).body.data).toHaveLength(1);
+    await call(h, "POST", "/v1/broadcast", { provider: "cloudflare", model_id: MODELS[0], on: false });
+    expect((await call(h, "GET", "/v1/models")).body.data).toHaveLength(0);
+  });
+
+  it("hiding a model removes EVERY name it was published under", async () => {
+    // Found while clicking the UI: publishing the same model twice under
+    // different names leaves two rows, and hiding by model id removed only
+    // one -- so the model stayed advertised and callable under the name the
+    // user believed they had turned off. `unadvertiseModel` deletes the one
+    // row it finds; the honest fix is to clear them all.
+    const h = await harness();
+    await call(h, "POST", "/v1/broadcast", {
+      provider: "cloudflare", model_id: MODELS[0], on: true, alias: "first-name",
+    });
+    await call(h, "POST", "/v1/broadcast", {
+      provider: "cloudflare", model_id: MODELS[0], on: true, alias: "second-name",
+    });
+    expect(listAdvertised(h.deps.db)).toHaveLength(2);
+
+    await call(h, "POST", "/v1/broadcast", { provider: "cloudflare", model_id: MODELS[0], on: false });
+    // Both names must go: a model the user turned off that is still advertised
+    // is worse than one that was never on, because the UI says otherwise.
+    expect(listAdvertised(h.deps.db)).toHaveLength(0);
+    expect((await call(h, "GET", "/v1/models")).body.data).toHaveLength(0);
   });
 });

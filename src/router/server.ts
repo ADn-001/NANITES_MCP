@@ -1140,8 +1140,8 @@ async function handle(
           // Look the name up by real_id first: `deleteAdvertised` is keyed on
           // the ALIAS, so deleting by model id silently matched nothing and the
           // endpoint reported success while /v1/models kept listing the model.
-          const removedAlias = unadvertiseModel(opts.db, modelId, provider);
-          sendJson(res, 200, { on: false, model_id: modelId, removed: Boolean(removedAlias) });
+          const removed = unadvertiseModel(opts.db, modelId, provider);
+          sendJson(res, 200, { on: false, model_id: modelId, removed: removed.length > 0, removed_aliases: removed });
           return;
         }
         // Published under the model's own id, or a custom name the user chose.

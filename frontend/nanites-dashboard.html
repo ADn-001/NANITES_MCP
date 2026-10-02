@@ -3153,16 +3153,30 @@ async function loadModelBroadcast() {
     const groups = Object.keys(byProvider);
     box.innerHTML = groups.map(function (prov) {
       const models = byProvider[prov];
-      return '<div style="margin-bottom:10px;">'
+      return '<div style="margin-bottom:14px;">'
         + '<span class="panel-tag" style="display:inline-block; margin-bottom:6px;">' + esc(prov) + '</span>'
         + models.map(function (m, i) {
-            return '<div style="display:flex; align-items:center; gap:8px; padding:3px 0;">'
-              + '<label class="switch-row" for="bc-' + esc(prov) + '-' + i + '" style="margin:0;">'
+            // The published name, editable INLINE. A model id is not a name —
+            // `@cf/meta/llama-3.3-70b-instruct-fp8-fast` is what a provider
+            // calls it; the alias is what a client should send. Default to the
+            // name it is already published under so the field is never blank
+            // for a model that is on.
+            return '<div style="border:1px solid var(--border); border-radius:8px; padding:8px 10px; margin-bottom:6px;">'
+              + '<div style="display:flex; align-items:center; gap:8px;">'
+              + '<label class="switch-row" for="bc-' + esc(prov) + '-' + i + '" style="margin:0;flex:none;">'
               + '<span class="switch"><input type="checkbox" id="bc-' + esc(prov) + '-' + i + '" data-bc="1"'
               + ' data-provider="' + esc(m.provider) + '" data-model="' + esc(m.model_id) + '"'
               + (m.on ? ' checked' : '') + '></span></label>'
-              + '<span style="font-family:ui-monospace,monospace; font-size:11.5px;">' + esc(m.model_id) + '</span>'
-              + (m.alias ? '<span class="panel-tag" style="margin:0;">as ' + esc(m.alias) + '</span>' : '')
+              + '<span style="font-family:ui-monospace,monospace; font-size:11.5px; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis;">' + esc(m.model_id) + '</span>'
+              + '</div>'
+              + '<div class="row" style="justify-content:flex-start; margin-top:8px; gap:6px;">'
+              + '<input type="text" class="bc-alias" data-alias-for="' + esc(prov) + '|' + esc(m.model_id) + '"'
+              + ' value="' + esc(m.alias || '') + '" placeholder="nanites-flash"'
+              + ' style="flex:1; min-width:0; font-family:ui-monospace,monospace; font-size:11.5px;">'
+              + '<button class="btn" data-save-alias="1" data-provider="' + esc(m.provider) + '"'
+              + ' data-model="' + esc(m.model_id) + '" data-box="bc-' + esc(prov) + '-' + i + '">Save name</button>'
+              + '</div>'
+              + '<div class="bc-msg" data-msg-for="' + esc(prov) + '|' + esc(m.model_id) + '" style="font-size:10.5px; color:var(--text-muted);"></div>'
               + '</div>';
           }).join('')
         + '</div>';
@@ -3173,18 +3187,68 @@ async function loadModelBroadcast() {
         const provider = el.dataset.provider;
         const model_id = el.dataset.model;
         const on = el.checked;
-        const r = await routerCall('POST', '/v1/broadcast', { provider, model_id, on });
+        // Turning a model OFF must not be blocked by a name the user is still
+        // typing, so the name is only sent on the ON direction.
+        const payload = { provider: provider, model_id: model_id, on: on };
+        if (on) {
+          const field = document.querySelector('.bc-alias[data-alias-for="' + cssEscape(provider + '|' + model_id) + '"]');
+          if (field && field.value.trim()) payload.alias = field.value.trim();
+        }
+        const r = await routerCall('POST', '/v1/broadcast', payload);
         if (!r.ok) {
           el.checked = !on;
           alert('Could not update broadcast: ' + ((r.body && r.body.message) || r.status));
           return;
         }
+        if (on && r.body.alias) {
+          const field = document.querySelector('.bc-alias[data-alias-for="' + cssEscape(provider + '|' + model_id) + '"]');
+          if (field) field.value = r.body.alias;
+        }
+        loadAliases();
+      });
+    });
+
+    box.querySelectorAll('button[data-save-alias]').forEach(function (btn) {
+      btn.addEventListener('click', async function () {
+        const provider = btn.dataset.provider;
+        const model_id = btn.dataset.model;
+        const boxId = btn.dataset.box;
+        const field = box.querySelector('.bc-alias[data-alias-for="' + cssEscape(provider + '|' + model_id) + '"]');
+        const msg = box.querySelector('.bc-msg[data-msg-for="' + cssEscape(provider + '|' + model_id) + '"]');
+        const want = field.value.trim();
+
+        if (!want) {
+          // Empty means "stop overriding the name" — republish so the derived
+          // default comes back, rather than leaving a name that was never saved.
+          if (msg) msg.textContent = 'Name cleared — saving uses the model id.';
+        }
+        // Saving a name implies the model should be ON. A user naming a model
+        // they hid is a contradiction, and the toggle is the honest resolution.
+        const toggle = document.getElementById(boxId);
+        if (toggle && !toggle.checked) toggle.checked = true;
+
+        const payload = { provider: provider, model_id: model_id, on: true };
+        if (want) payload.alias = want;
+        const r = await routerCall('POST', '/v1/broadcast', payload);
+        if (!r.ok) {
+          if (msg) msg.textContent = 'Failed: ' + ((r.body && r.body.message) || r.status);
+          return;
+        }
+        // The server may have derived a different name; show what it stored.
+        if (field) field.value = r.body.alias || '';
+        if (msg) msg.textContent = 'Published as "' + (r.body.alias || '') + '".';
         loadAliases();
       });
     });
   } catch (e) {
     box.innerHTML = '<span style="color:var(--warn);">Could not load: ' + esc(String(e.message || e)) + '</span>';
   }
+}
+
+/** CSS.escape, for building a selector from an arbitrary id. */
+function cssEscape(s) {
+  if (window.CSS && CSS.escape) return CSS.escape(s);
+  return String(s).replace(/["\\\\]/g, '\\\\$&');
 }
 
 async function loadAliases() {

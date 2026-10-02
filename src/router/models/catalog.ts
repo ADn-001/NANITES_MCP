@@ -171,10 +171,20 @@ export function renderCatalog(models: AdvertisedModel[], dialect: "anthropic" | 
  * the toggle would report success while the model stayed listed. The row is
  * uniquely identified by (real_id, provider), which is what this uses.
  */
-export function unadvertiseModel(db: DatabaseSync, realId: string, provider: string): string | null {
-  const row = db.prepare("SELECT alias FROM router_advertised WHERE real_id = ? AND provider = ?")
-    .get(realId, provider) as { alias: string } | undefined;
-  if (!row) return null;
-  db.prepare("DELETE FROM router_advertised WHERE alias = ?").run(row.alias);
-  return row.alias;
+export function unadvertiseModel(db: DatabaseSync, realId: string, provider: string): string[] {
+  // EVERY published name, not just the first.
+  //
+  // A model can be published under several aliases -- renaming does not remove
+  // the old row -- so deleting one leaves the model advertised and callable
+  // under a name the user believes they turned off. Found by clicking the UI:
+  // the toggle reported success, the model stayed in /v1/models, and the
+  // dashboard said it was off. A model the UI reports as hidden while it is
+  // still advertised is worse than one that was never on, because the display
+  // is then lying.
+  const rows = db.prepare("SELECT alias FROM router_advertised WHERE real_id = ? AND provider = ?")
+    .all(realId, provider) as Array<{ alias: string }>;
+  if (rows.length === 0) return [];
+  const stmt = db.prepare("DELETE FROM router_advertised WHERE alias = ?");
+  for (const r of rows) stmt.run(r.alias);
+  return rows.map((r) => r.alias);
 }
