@@ -15,8 +15,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import { NanitesError } from "../../helpers/errors.js";
 import { setTimeout as delay } from "node:timers/promises";
-import { dispatchCfRun } from "../outbound/cloudflareRun.js";
-import { resolveTarget, isRoutable } from "../outbound/resolve.js";
+import { dispatchCfRun, needsRunPath } from "../outbound/cloudflareRun.js";
+import { dispatchWithFailover } from "../outbound/dispatch.js";
+import { resolveTarget, isRoutable, type RoutableTarget } from "../outbound/resolve.js";
 import { resolveHelperAlias } from "../helpers/registry.js";
 import { decodeOpenAiRequest } from "../inbound/openai.js";
 import { decodeAnthropicRequest } from "../inbound/anthropic.js";
@@ -115,19 +116,25 @@ export async function runJob(opts: RunJobOptions): Promise<RunResult> {
     }
 
     try {
-      const out = await dispatchCfRun({
-        db: opts.db,
-        target,
-        request,
-        signal: opts.signal,
-      });
+      // Route by CAPABILITY. Cloudflare's non-text models need the /ai/run
+      // body shape; everything else is an ordinary chat call that only looks
+      // slow. Calling dispatchCfRun unconditionally sent every other provider's
+      // job to Workers AI, which then reported a perfectly good model as
+      // "not in the free-tier registry".
+      const out = needsRunPath(target.model_id) && target.provider === "cloudflare"
+        ? await dispatchCfRun({ db: opts.db, target, request, signal: opts.signal })
+        : await runChatJob({ db: opts.db, target, request, signal: opts.signal });
       store.update(job.job_id, { status: "finalizing", phase: "finalizing" });
       // The artifact is stored as a data URI so a job is self-contained: the
       // caller can fetch it with no other lookup.
       const uri = out.artifact
         ? `data:${out.artifact.mime};base64,${out.artifact.b64}`
         : null;
-      store.update(job.job_id, { status: "done", phase: "done", artifact_uri: uri });
+      // The text goes in the row, not just the return value: the caller reads
+      // the job over HTTP and the return value never leaves this process.
+      store.update(job.job_id, {
+        status: "done", phase: "done", artifact_uri: uri, result_text: out.text ?? null,
+      });
       return { artifact: out.artifact, text: out.text, attempts: attempt };
     } catch (err) {
       const e = err as NanitesError;
@@ -155,4 +162,30 @@ export async function runJob(opts: RunJobOptions): Promise<RunResult> {
     error: { code: fallback.code, message: fallback.message },
   });
   return { artifact: null, text: null, attempts: maxAttempts };
+}
+
+/**
+ * A chat-model job: an ordinary dispatch whose reply becomes the job result.
+ *
+ * Returned in the same shape as `dispatchCfRun` so the caller does not branch
+ * on which kind of job it ran. `artifact` is always null -- a text completion
+ * has nothing to store as a data URI, and returning a base64 of the text would
+ * invite a client to treat a string as an image.
+ */
+async function runChatJob(args: {
+  db: DatabaseSync;
+  target: RoutableTarget;
+  request: IRRequest;
+  signal?: AbortSignal;
+}): Promise<{ artifact: null; text: string | null }> {
+  const ir = await dispatchWithFailover({
+    db: args.db,
+    target: args.target,
+    request: args.request,
+  });
+  const text = ir.content
+    .filter((p): p is { type: "text"; text: string } => p.type === "text")
+    .map((p) => p.text)
+    .join("");
+  return { artifact: null, text: text || null };
 }

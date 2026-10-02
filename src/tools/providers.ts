@@ -263,3 +263,32 @@ function categoryOf(m: { capabilities?: unknown }): string | null {
   const c = v?.["category"];
   return typeof c === "string" ? c : null;
 }
+
+/**
+ * A provider value that may name a generic endpoint.
+ *
+ * `validateProvider` accepts only the five bare kind names, which is right for
+ * everything else but wrong here: a generic gateway is its OWN endpoint and the
+ * UI selects it as `generic:<nickname>`. Running that through the old
+ * validator threw, so a named endpoint could never be discovered.
+ */
+export interface ProviderTarget {
+  provider: ProviderKind;
+  /** The generic endpoint's name, or null. */
+  endpoint: string | null;
+}
+
+export function parseProviderTarget(value: string): ProviderTarget {
+  const i = value.indexOf(":");
+  if (i < 0) return { provider: validateProvider(value), endpoint: null };
+  const kind = value.slice(0, i);
+  const endpoint = value.slice(i + 1).trim();
+  if (!endpoint) {
+    throw new NanitesError({
+      code: "invalid_arguments",
+      message: `Provider "${value}" names no endpoint. Use "generic" alone for the default, or "generic:<name>".`,
+      retryable: false,
+    });
+  }
+  return { provider: validateProvider(kind), endpoint };
+}

@@ -266,6 +266,8 @@ function publicJob(job: JobRow): Record<string, unknown> {
     source: job.source,
     target: job.target,
     artifact_uri: job.artifact_uri,
+    // The text answer of a chat-model job. Null for an artifact job.
+    result_text: job.result_text ?? null,
     error: job.error,
     created_at: job.created_at,
     updated_at: job.updated_at,

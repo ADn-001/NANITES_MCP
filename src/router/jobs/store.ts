@@ -35,6 +35,11 @@ export interface JobRow {
   /** Always present. The honest fallback when there is no percentage. */
   phase: string;
   artifact_uri: string | null;
+  /**
+   * A TEXT job's answer. Null for an artifact job, which has no text form --
+   * `artifact_uri` is its result.
+   */
+  result_text: string | null;
   error: { code: string; message: string } | null;
   /** Parsed, not the raw column. */
   request: unknown;
@@ -44,6 +49,8 @@ export interface JobRow {
 }
 
 interface RawRow {
+  // Absent on rows written before migration 31, hence the `?? null` on read.
+  result_text?: string | null;
   job_id: string; status: string; source: string; target: string; model: string;
   progress: number | null; phase: string; artifact_uri: string | null; error: string | null;
   request: string; created_at: string; updated_at: string; completed_at: string | null;
@@ -68,6 +75,7 @@ function rowToJob(r: RawRow): JobRow {
     progress: r.progress === null ? null : Number(r.progress),
     phase: r.phase,
     artifact_uri: r.artifact_uri,
+    result_text: r.result_text ?? null,
     error: parseJson<{ code: string; message: string } | null>(r.error, null),
     // Parsed on read. The column holds JSON, and returning the raw string made
     // every consumer cast it — the runner then spread a STRING, which produced
@@ -79,7 +87,7 @@ function rowToJob(r: RawRow): JobRow {
   };
 }
 
-const COLUMNS = "job_id, status, source, target, model, progress, phase, artifact_uri, error, request, created_at, updated_at, completed_at";
+const COLUMNS = "job_id, status, source, target, model, progress, phase, artifact_uri, result_text, error, request, created_at, updated_at, completed_at";
 
 export class JobStore {
   constructor(private readonly db: DatabaseSync) {}
@@ -120,7 +128,15 @@ export class JobStore {
    */
   update(
     jobId: string,
-    patch: { status?: JobStatus; phase?: string; progress?: number | null; artifact_uri?: string | null; error?: { code: string; message: string } | null },
+    patch: {
+      status?: JobStatus;
+      phase?: string;
+      progress?: number | null;
+      artifact_uri?: string | null;
+      /** A chat job's answer; null for an artifact job. */
+      result_text?: string | null;
+      error?: { code: string; message: string } | null;
+    },
   ): void {
     const sets: string[] = ["updated_at = ?"];
     const params: Array<string | number | null> = [nowIso()];
@@ -128,6 +144,7 @@ export class JobStore {
     if (patch.phase !== undefined) { sets.push("phase = ?"); params.push(patch.phase); }
     if (patch.progress !== undefined) { sets.push("progress = ?"); params.push(patch.progress); }
     if (patch.artifact_uri !== undefined) { sets.push("artifact_uri = ?"); params.push(patch.artifact_uri); }
+    if (patch.result_text !== undefined) { sets.push("result_text = ?"); params.push(patch.result_text); }
     if (patch.error !== undefined) { sets.push("error = ?"); params.push(patch.error ? JSON.stringify(patch.error) : null); }
     if (patch.status === "done" || patch.status === "failed" || patch.status === "cancelled") {
       sets.push("completed_at = ?");

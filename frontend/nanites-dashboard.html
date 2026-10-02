@@ -1265,10 +1265,6 @@
       <div id="providerModelsToolbar" style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
         <select id="providerModelFilter" style="flex:1;min-width:120px;">
           <option value="">All providers</option>
-          <option value="cloudflare">Cloudflare</option>
-          <option value="openrouter">OpenRouter</option>
-          <option value="omniroute">OmniRoute</option>
-          <option value="generic">Generic</option>
         </select>
         <button class="btn" id="deregisterSelectedBtn" disabled onclick="deregisterSelectedProviderModels()">Remove selected</button>
         <button class="btn" id="discoverModelsBtn">Discover Models</button>
@@ -1276,12 +1272,7 @@
       <div style="margin-bottom:12px;padding:10px;background:var(--panel-bg);border:1px solid var(--border);border-radius:6px;">
         <p style="font-size:10px;color:var(--text-muted);margin:0 0 8px;">Add model manually</p>
         <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:flex-start;">
-          <select id="newModelProvider" style="min-width:110px;">
-            <option value="cloudflare">Cloudflare</option>
-            <option value="openrouter">OpenRouter</option>
-            <option value="omniroute">OmniRoute</option>
-            <option value="generic">Generic</option>
-          </select>
+          <select id="newModelProvider" style="min-width:110px;"></select>
           <input type="text" id="newModelNickname" placeholder="nickname (optional)" style="min-width:110px;">
           <input type="text" id="newModelId" placeholder="model id (e.g. anthropic/claude-sonnet-5)" style="flex:1;min-width:160px;">
           <button class="btn" id="testNewModelBtn" onclick="testNewModel(this)" style="padding:2px 8px;font-size:10px;">Test</button>
@@ -1707,6 +1698,76 @@ const PROVIDER_ENDPOINTS = {
 
 let providerState = { config: null, keys: [], models: [], errors: [], discovery: null };
 
+/* ---------- provider options ----------
+   Built from the CONFIGURED KEYS, not a hardcoded list.
+
+   The list used to be four literal <option>s, which is how NVIDIA went
+   missing: it is a first-class ProviderKind the whole stack accepts, and the
+   dashboard simply did not name it. A key could be added and then be
+   unselectable anywhere in the UI.
+
+   Each GENERIC key also appears as its own entry, because a generic gateway
+   is its own endpoint -- `generic:<endpoint>:<model>` is the stored id. The
+   value is `generic:<nickname>` so discovery targets THAT gateway instead of
+   whichever generic key happened to be first. */
+const PROVIDER_LABELS = {
+  cloudflare: 'Cloudflare', openrouter: 'OpenRouter', omniroute: 'OmniRoute',
+  nvidia: 'NVIDIA NIM', local: 'Local (LM Studio)',
+};
+
+function providerOptions() {
+  const keys = (providerState.keys || []).filter((k) => k && k.provider);
+  const seen = new Set();
+  const out = [];
+  for (const k of keys) {
+    if (k.provider === 'generic') {
+      // The endpoint's NAME is the nickname. Skip a generic key with no name:
+      // it cannot be addressed, and offering it would produce an id with an
+      // empty endpoint segment.
+      const name = (k.nickname || '').trim();
+      if (!name) continue;
+      const v = 'generic:' + name;
+      if (seen.has(v)) continue;
+      seen.add(v);
+      out.push({ value: v, label: name });
+    } else {
+      if (seen.has(k.provider)) continue;
+      seen.add(k.provider);
+      out.push({ value: k.provider, label: PROVIDER_LABELS[k.provider] || k.provider });
+    }
+  }
+  // Anything configured but unknown still gets an entry, so a provider this
+  // build has never heard of is selectable rather than invisible.
+  return out;
+}
+
+function fillProviderSelects() {
+  const opts = providerOptions();
+  const filter = document.getElementById('providerModelFilter');
+  if (filter) {
+    const cur = filter.value;
+    filter.innerHTML = '<option value="">All providers</option>'
+      + opts.map((o) => '<option value="' + esc(o.value) + '">' + esc(o.label) + '</option>').join('');
+    if (opts.some((o) => o.value === cur)) filter.value = cur;
+  }
+  const add = document.getElementById('newModelProvider');
+  if (add) {
+    const cur = add.value;
+    add.innerHTML = opts.length
+      ? opts.map((o) => '<option value="' + esc(o.value) + '">' + esc(o.label) + '</option>').join('')
+      : '<option value="">no provider keys configured</option>';
+    if (opts.some((o) => o.value === cur)) add.value = cur;
+  }
+}
+
+/** "generic:nvidia nim" -> { provider:'generic', endpoint:'nvidia nim' }. */
+function splitProviderValue(v) {
+  const i = String(v || '').indexOf(':');
+  if (i < 0) return { provider: v, endpoint: null };
+  return { provider: v.slice(0, i), endpoint: v.slice(i + 1) };
+}
+
+
 async function refreshProviders(){
   let ok = false;
   try {
@@ -1722,6 +1783,7 @@ async function refreshProviders(){
   } catch (e) {
     providerState.config = null; providerState.keys = []; providerState.models = [];
   }
+  fillProviderSelects();
   renderProviderOrder();
   renderProviderKeys();
   renderProviderModels();
@@ -2127,6 +2189,8 @@ window.discoverModels = async function(){
   // Discover under "Cloudflare" still listed every provider's models.
   const only = document.getElementById('providerModelFilter')?.value || null;
   try {
+    // `only` may be `generic:<endpoint>` now, and that value goes to the server
+    // verbatim so discovery targets THAT gateway.
     const res = await fetch('/api/providers/discover', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(only ? { provider: only } : {}) });
     const data = await res.json();
     const scope = only ? ` for ${only}` : '';

@@ -669,6 +669,17 @@ export const MIGRATIONS: Migration[] = [
     version: 30,
     sql: "",
   },
+  {
+    // The TEXT result of a job.
+    //
+    // `artifact_uri` alone meant a chat-model job had nowhere to put its
+    // answer: the runner computed the completion, reported `done`, and
+    // returned nothing the caller could read. Every model slower than the
+    // synchronous budget needs the job path, so the model class it was built
+    // for could not actually be used through it.
+    version: 31,
+    sql: "",
+  },
 ];
 
 /**
@@ -735,6 +746,8 @@ export function applyMigrations(db: DatabaseSync, home?: string): void {
             db.exec(`ALTER TABLE router_config ADD COLUMN ${name} ${decl}`);
           }
         }
+      } else if (migration.version === 31) {
+        addJobTextColumn(db);
       } else if (migration.version === 30) {
         addAutoRouteColumn(db);
       } else if (migration.version === 29) {
@@ -1021,5 +1034,15 @@ function addAutoRouteColumn(db: DatabaseSync): void {
   );
   if (!have.has("auto_route_modality")) {
     db.exec("ALTER TABLE router_config ADD COLUMN auto_route_modality INTEGER NOT NULL DEFAULT 0");
+  }
+}
+
+/** Idempotent, like every other column-adding migration here. */
+function addJobTextColumn(db: DatabaseSync): void {
+  const have = new Set(
+    (db.prepare("PRAGMA table_info(router_jobs)").all() as Array<{ name: string }>).map((c) => c.name),
+  );
+  if (!have.has("result_text")) {
+    db.exec("ALTER TABLE router_jobs ADD COLUMN result_text TEXT");
   }
 }

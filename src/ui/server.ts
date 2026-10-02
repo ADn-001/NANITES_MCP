@@ -16,6 +16,8 @@ import path from "node:path";
 import type { AddressInfo } from "node:net";
 import type { ToolDeps } from "../tools/deps.js";
 import { readHelperState, applyHelperToggle } from "../tools/routerHelpers.js";
+import { parseProviderTarget } from "../tools/providers.js";
+import { namespaceModelId } from "../storage/providerModelId.js";
 import { providerKeyCounts, providerModelCounts, routerTableCount } from "../router/providers/inventory.js";
 import { readConfig } from "../router/auth.js";
 import { routerProfile } from "../router/constants.js";
@@ -1229,37 +1231,70 @@ async function handleProviderDiscover(deps: ToolDeps, req: IncomingMessage, res:
   // query string. It used to read the query string only, so a per-provider
   // discover silently scanned every configured provider instead.
   const body = (await readJsonBody(req)) as { provider?: string } | null;
-  const prov = (body?.provider ?? provParam) ? validateProvider(body?.provider ?? provParam) : null;
+  const rawProvider = body?.provider ?? provParam;
+  // `generic:<endpoint>` is a valid selection now: the endpoint NAME has to
+  // reach discovery, because two generic gateways produce the same model ids
+  // and are only distinguishable by it.
+  const target = rawProvider ? parseProviderTarget(rawProvider) : null;
+  const prov = target?.provider ?? null;
   const { profileName, keyStore, modelStore } = providerDeps(deps);
   const { createProviderClient, GenericClient } = await import('../providers/client.js');
 
   const providers = prov ? [prov] : VALID_PROVIDERS;
   const allModels: Array<{ id: string; name: string; owned_by: string | null; context_length: number | null; provider: string }> = [];
 
+  // One entry per (provider, ENDPOINT). Taking keys[0] discovered a single
+  // generic gateway and reported success, so a second one was invisible --
+  // no error, just a catalog that quietly belonged to somewhere else.
   for (const p of providers) {
-    const keys = keyStore.availableKeys(profileName, p);
+    // When the caller NAMED a generic endpoint, only that one is discovered.
+    const wantedEndpoint = target?.endpoint ?? null;
+    const keys = keyStore.availableKeys(profileName, p)
+      .filter((k) => {
+        if (p !== 'generic' || !wantedEndpoint) return true;
+        return (k.nickname ?? '').trim() === wantedEndpoint;
+      });
     if (keys.length === 0) continue;
-    const key = keys[0]!;
-    try {
-      let result;
-      if (p === 'cloudflare') {
-        if (!key.account_id) continue;
-        result = await createProviderClient('cloudflare').listModels(key.api_key, key.account_id);
-      } else if (p === 'openrouter') {
-        result = await createProviderClient('openrouter').listModels(key.api_key);
-      } else if (p === 'omniroute') {
-        // Per-key gateway_url wins; fall back to the default local proxy.
-        const base = key.gateway_url ?? 'http://localhost:20128/v1';
-        result = await createProviderClient('omniroute', base).listModels(key.api_key);
-      } else {
-        const base = key.gateway_url ?? 'http://localhost:8080/v1';
-        result = await new GenericClient(base).listModels(key.api_key);
+
+    for (const key of keys) {
+      // A generic endpoint is addressed by its nickname. Without one the models
+      // would be stored under `generic::model`, which nothing can resolve.
+      const endpointName = p === 'generic' ? (key.nickname ?? '').trim() : null;
+      if (p === 'generic' && !endpointName) continue;
+      try {
+        let result;
+        if (p === 'cloudflare') {
+          if (!key.account_id) continue;
+          result = await createProviderClient('cloudflare').listModels(key.api_key, key.account_id);
+        } else if (p === 'openrouter' || p === 'nvidia') {
+          result = await createProviderClient(p).listModels(key.api_key);
+        } else if (p === 'omniroute') {
+          // Per-key gateway_url wins; fall back to the default local proxy.
+          const base = key.gateway_url ?? 'http://localhost:20128/v1';
+          result = await createProviderClient('omniroute', base).listModels(key.api_key);
+        } else {
+          const base = key.gateway_url ?? 'http://localhost:8080/v1';
+          result = await new GenericClient(base).listModels(key.api_key);
+        }
+        // Named per-endpoint via the SHARED id builder, so two gateways never
+        // overwrite each other and the stored form matches what the router
+        // resolves (`generic:<endpoint>:<model>`).
+        const models = endpointName
+          ? result.models.map((m) => ({ ...m, id: namespaceModelId(p, m.id, endpointName) }))
+          : result.models;
+        modelStore.upsertModels(profileName, p, models);
+        const mapped = result.models.slice(0, 20).map((m) => ({
+          id: endpointName ? namespaceModelId(p, m.id, endpointName) : m.id,
+          name: m.name ?? m.id,
+          owned_by: m.owned_by ?? null,
+          context_length: m.context_length ?? null,
+          provider: p,
+          endpoint: endpointName,
+        }));
+        allModels.push(...mapped);
+      } catch {
+        // A gateway that fails is skipped; the others still report.
       }
-      modelStore.upsertModels(profileName, p, result.models);
-      const mapped = result.models.slice(0, 20).map((m) => ({ id: m.id, name: m.name ?? m.id, owned_by: m.owned_by ?? null, context_length: m.context_length ?? null, provider: p }));
-      allModels.push(...mapped);
-    } catch {
-      // skip providers that fail
     }
   }
 
