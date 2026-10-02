@@ -1534,6 +1534,20 @@ export function createUiHandler(deps: ToolDeps, bind: UiBind, opts: { diskAvaila
       // The helper toggle, for the Settings panel. Same path as the MCP tool
       // (`nanites_toggleHelpers`) and the same shared database, so the three
       // surfaces cannot drift.
+      // Identity probe. The dashboard launcher compares this against its own
+      // repository root to decide whether the process already on the port is
+      // THIS build or a leftover from another checkout. Without it the
+      // launcher defers to any Nanites-shaped response, which is how a stale
+      // dashboard kept the port and served a preview with missing routes.
+      if (req.method === "GET" && p === "/api/instance") {
+        return sendJson(res, 200, {
+          name: "nanites-dashboard",
+          // Forward slashes, so the comparison is not defeated by Windows
+          // path separators differing between the two processes.
+          root: instanceRoot(),
+          version: 1,
+        });
+      }
       if (req.method === "GET" && p === "/api/router/config") return handleGetHelperConfig(deps, res);
       if (req.method === "POST" && p === "/api/router/config") return await handlePostHelperConfig(deps, req, res);
       if (req.method === "GET" && p === "/api/router/status") return handleGetRouterStatus(deps, res);
@@ -1730,4 +1744,16 @@ function handleGetRouterStatus(deps: ToolDeps, res: ServerResponse): void {
     },
     helpers: readHelperState(deps.db),
   });
+}
+
+/**
+ * The repository this dashboard is serving from.
+ *
+ * Resolved from the location of the BUILT server file, not from an env var or
+ * a config row: those can be inherited from another process and would report a
+ * root that is not the code actually running.
+ */
+function instanceRoot(): string {
+  return path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "..", "..")
+    .split(path.sep).join("/");
 }

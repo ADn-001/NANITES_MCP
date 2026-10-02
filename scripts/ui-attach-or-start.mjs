@@ -23,9 +23,17 @@
 import { execFile } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const execFileAsync = promisify(execFile);
 const port = Number(process.env.NANITES_UI_PORT || 4700);
+
+// The repository THIS script is in. Compared against the running dashboard's
+// reported root, so a build from another checkout is replaced rather than
+// deferred to. Normalized to forward slashes for the comparison.
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
+  .split(path.sep).join("/");
 
 async function probeOk() {
   const ctrl = new AbortController();
@@ -40,6 +48,16 @@ async function probeOk() {
   }
 }
 
+/**
+ * True for ANY Nanites dashboard, whatever build it is.
+ *
+ * Split from `isOurDashboard` on purpose. A Nanites-shaped process from a
+ * different checkout is still a Nanites dashboard and is still safe to
+ * replace -- it is the same product, just not this build. Conflating the two
+ * made a stale sibling checkout look like a foreign process, and the
+ * conservative branch then refused to take the port back, so the preview
+ * permanently served an old build with missing routes.
+ */
 async function isNanitesDashboard() {
   try {
     const res = await fetch(`http://127.0.0.1:${port}/api/profiles`, {
@@ -48,6 +66,33 @@ async function isNanitesDashboard() {
     if (!res.ok) return false;
     const body = await res.json();
     return Array.isArray(body.profiles) && "active" in body;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * True only for a dashboard that is BOTH a Nanites dashboard AND serving the
+ * same repository we are launching from.
+ *
+ * The shape check alone was the bug this replaces: `/api/profiles` returning
+ * `{profiles, active}` is true of EVERY Nanites build, so a dashboard left
+ * running by an older checkout kept the port and the launcher deferred to it.
+ * The result was a preview showing a build with no `/api/router/status`, and
+ * no error to explain why.
+ *
+ * A second signal is needed because a DIFFERENT Nanites version may not have
+ * `/api/router/status` at all -- its absence means "not our build", not "an
+ * older version of our build", and both must be replaced.
+ */
+async function isOurDashboard() {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/instance`, {
+      signal: AbortSignal.timeout(1500),
+    });
+    if (!res.ok) return false;
+    const id = await res.json();
+    return id?.root === REPO_ROOT;
   } catch {
     return false;
   }
@@ -98,11 +143,17 @@ async function waitPortFree(timeoutMs) {
 
 if (await probeOk()) {
   if (await isNanitesDashboard()) {
-    // A Nanites dashboard (usually an MCP lazy-spawned detached child) already
-    // owns the port. Take it over so THIS spawned preview process serves it.
+    // A Nanites dashboard already owns the port -- either ours (an MCP
+    // lazy-spawned detached child) or a different checkout's. Take it over
+    // either way, so THIS process serves the port.
+    const ours = await isOurDashboard();
     const pid = await resolvePidOnPort();
     if (pid) {
-      console.log(`nanites dashboard already on http://127.0.0.1:${port} (pid ${pid}); taking over`);
+      console.log(
+        ours
+          ? `nanites dashboard already on http://127.0.0.1:${port} (pid ${pid}); taking over`
+          : `a DIFFERENT nanites checkout is on http://127.0.0.1:${port} (pid ${pid}); replacing it with this build`,
+      );
       await killPid(pid);
       if (await waitPortFree(3000)) {
         await import("../dist/ui/main.js");
