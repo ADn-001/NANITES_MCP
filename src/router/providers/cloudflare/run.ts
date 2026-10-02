@@ -81,7 +81,10 @@ export function buildRunBody(model: CfModelDef, request: IRRequest): Record<stri
       // { image: number[], prompt } — the image is RAW BYTES as an integer
       // array, which is the one Workers AI shape that is not base64.
       const image = findImagePart(request);
-      if (image) body["image"] = Array.from(fromBase64(image.url));
+      // Per-model field NAME. Moondream takes `images`; everything else takes
+      // `image`. The wrong name is a 500 that reads like a base64 problem, and
+      // re-encoding does not fix it.
+      if (image) body[model.imageField ?? "image"] = Array.from(fromBase64(image.url));
       body["prompt"] = text || "Describe this image";
       return body;
     }

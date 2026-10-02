@@ -149,6 +149,30 @@ describe("request shaping per category", () => {
     expect(body["prompt"]).toBe("what is this");
   });
 
+  it("uses the model's OWN image field name", () => {
+    // PROBED 2026-10-02. LLaVA and Moondream both declare acceptsImage, and
+    // they want DIFFERENT keys: `image` and `images`. Sending `image` to
+    // Moondream returns "Type mismatch of '/image', 'string' not in
+    // 'array','binary'" -- which reads like a base64 encoding fault, and
+    // re-encoding the same bytes as a string array fails identically. Only the
+    // field NAME was wrong.
+    const moondream = findCfModel("@cf/moondream/moondream3.1-9B-A2B")!;
+    const mBody = buildRunBody(moondream, req({
+      messages: [{ role: "user", content: [{ type: "image_url", url: `data:image/png;base64,${pngB64}` }, { type: "text", text: "what is this" }] }],
+    }));
+    expect(moondream.imageField).toBe("images");
+    expect(mBody["images"]).toBeDefined();
+    expect(mBody["image"]).toBeUndefined();
+
+    // And the default is unchanged, so every other model still gets `image`.
+    const llava = findCfModel("@cf/llava-hf/llava-1.5-7b-hf")!;
+    const lBody = buildRunBody(llava, req({
+      messages: [{ role: "user", content: [{ type: "image_url", url: `data:image/png;base64,${pngB64}` }, { type: "text", text: "what is this" }] }],
+    }));
+    expect(llava.imageField).toBeUndefined();
+    expect(lBody["image"]).toBeDefined();
+  });
+
   it("text-to-image sends ONLY the parameters the model accepts", () => {
     // PROBED 2026-09-29: flux-1-schnell documents num_steps/width/height/
     // guidance/seed but accepts `prompt` ALONE, and answers "Additional or

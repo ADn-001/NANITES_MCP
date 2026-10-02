@@ -140,6 +140,13 @@ export function listProviderModels(deps: ToolDeps, provider: string, registeredO
       owned_by: m.owned_by,
       is_registered: m.is_registered,
       context_window: m.context_window,
+      // What the model ACCEPTS as input, and what it PRODUCES. Without these
+      // a harness sees a flat list of names and cannot tell that one takes an
+      // image and another does not -- so it either sends media to a text model
+      // or refuses to use the vision models that are sitting right there.
+      accepts: parseModalities(m.supported_modalities),
+      produces: returnsOf(m.capabilities),
+      category: categoryOf(m),
     })),
   };
 }
@@ -216,4 +223,43 @@ export function setProviderPreferenceOrder(deps: ToolDeps, order: ProviderKind[]
   const profile = requireActiveProfile(deps);
   deps.profiles.updateProfile(profile.name, { name: profile.name, provider_preference_order: order });
   return { preference_order: order };
+}
+
+/** Modalities, tolerant of a row that has none. */
+function parseModalities(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw.filter((x): x is string => typeof x === "string");
+  if (typeof raw !== "string") return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * What the model PRODUCES, from the capabilities blob.
+ *
+ * A separate reader rather than reusing parseModalities: the value may be a
+ * non-JSON string, and parsing it INLINE threw out of the map and turned the
+ * whole tool into "Internal error" for every model that had one.
+ */
+function returnsOf(raw: unknown): string[] {
+  // The store PARSES capabilities on read and hands back an object, so a
+  // string-only check silently produced an empty list for every model. Both
+  // shapes are accepted because a raw row from elsewhere may still be text.
+  const v = typeof raw === "string"
+    ? (() => { try { return JSON.parse(raw) as Record<string, unknown>; } catch { return null; } })()
+    : (raw as Record<string, unknown> | null);
+  const r = v?.["returns"];
+  return Array.isArray(r) ? r.filter((x): x is string => typeof x === "string") : [];
+}
+
+/** The Cloudflare category, when the row recorded one. */
+function categoryOf(m: { capabilities?: unknown }): string | null {
+  const v = typeof m.capabilities === "string"
+    ? (() => { try { return JSON.parse(m.capabilities) as Record<string, unknown>; } catch { return null; } })()
+    : (m.capabilities as Record<string, unknown> | null);
+  const c = v?.["category"];
+  return typeof c === "string" ? c : null;
 }

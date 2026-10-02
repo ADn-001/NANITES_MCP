@@ -47,6 +47,19 @@ export interface CfModelDef {
    */
   params?: string[];
   /**
+   * The FIELD NAME carrying the image, for image-to-text models.
+   *
+   * PROBED 2026-10-02, and the reason this exists: two vision models with
+   * identical `acceptsImage` want different keys. LLaVA takes `image` as a raw
+   * byte array and answers; Moondream takes `images` and answers. Sending
+   * `image` to Moondream returns "Type mismatch of '/image', 'string' not in
+   * 'array','binary'" -- which reads like an encoding problem, and re-encoding
+   * the same bytes fails identically. Only the name is wrong.
+   *
+   * Absent = `image`.
+   */
+  imageField?: string;
+  /**
    * Set when the request shape could NOT be confirmed against the live API.
    *
    * A planner must not offer an unverified model: guessing a body shape
@@ -110,7 +123,7 @@ export const CF_MODELS: CfModelDef[] = [
   { id: "@cf/runwayml/stable-diffusion-v1-5-img2img", category: "image-to-image", format: "json", acceptsImage: true, acceptsText: true, acceptsAudio: false, returnsImage: true, returnsAudio: false, returnsText: false, deprecated: false, description: "SD v1.5 img2img" },
   { id: "@cf/runwayml/stable-diffusion-v1-5-inpainting", category: "image-to-image", format: "json", acceptsImage: true, acceptsText: true, acceptsAudio: false, returnsImage: true, returnsAudio: false, returnsText: false, deprecated: false, description: "SD v1.5 inpainting" },
   { id: "@cf/llava-hf/llava-1.5-7b-hf", category: "image-to-text", format: "json", acceptsImage: true, acceptsText: true, acceptsAudio: false, returnsImage: false, returnsAudio: false, returnsText: true, deprecated: false, description: "LLaVA 1.5 captioning VQA" },
-  { id: "@cf/moondream/moondream3.1-9B-A2B", category: "image-to-text", format: "json", acceptsImage: true, acceptsText: true, acceptsAudio: false, returnsImage: false, returnsAudio: false, returnsText: true, deprecated: false, description: "Moondream 3 9B visual reasoning" },
+  { id: "@cf/moondream/moondream3.1-9B-A2B", category: "image-to-text", format: "json", imageField: "images", acceptsImage: true, acceptsText: true, acceptsAudio: false, returnsImage: false, returnsAudio: false, returnsText: true, deprecated: false, description: "Moondream 3 9B visual reasoning" },
   { id: "@cf/myshell-ai/melotts", category: "text-to-speech", format: "json", acceptsImage: false, acceptsText: true, acceptsAudio: false, returnsImage: false, returnsAudio: true, returnsText: false, deprecated: false, description: "MeloTTS multilingual" },
   { id: "@cf/deepgram/aura-1", category: "text-to-speech", format: "json", acceptsImage: false, acceptsText: true, acceptsAudio: false, returnsImage: false, returnsAudio: true, returnsText: false, deprecated: false, description: "Deepgram Aura TTS" },
   { id: "@cf/deepgram/aura-2-en", category: "text-to-speech", format: "json", acceptsImage: false, acceptsText: true, acceptsAudio: false, returnsImage: false, returnsAudio: true, returnsText: false, deprecated: false, description: "Deepgram Aura-2 English" },
