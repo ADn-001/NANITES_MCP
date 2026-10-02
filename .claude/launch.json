@@ -4,11 +4,16 @@
     {
       "name": "nanites-dashboard",
       "runtimeExecutable": "node",
-      "runtimeArgs": ["scripts/ui-attach-or-start.mjs"],
+      "runtimeArgs": [
+        "scripts/ui-attach-or-start.mjs"
+      ],
       "url": "http://localhost:4700",
       "port": 4700,
       "autoPort": false,
-      "cwd": "."
+      "cwd": ".",
+      "env": {
+        "NANITES_ROUTER_KEY": "local-dev-router-key"
+      }
     }
   ]
 }

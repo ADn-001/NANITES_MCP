@@ -1551,6 +1551,20 @@ export function createUiHandler(deps: ToolDeps, bind: UiBind, opts: { diskAvaila
       if (req.method === "GET" && p === "/api/router/config") return handleGetHelperConfig(deps, res);
       if (req.method === "POST" && p === "/api/router/config") return await handlePostHelperConfig(deps, req, res);
       if (req.method === "GET" && p === "/api/router/status") return handleGetRouterStatus(deps, res);
+      // READS go through the proxy too. The browser calling the router
+      // directly is a cross-origin request to a different port, which fails
+      // the preflight -- and even if it did not, it would need the virtual
+      // key in the page. Same reason as the writes.
+      if (req.method === "GET" && (p === "/api/router/read" || p === "/api/router/read/")) {
+        return await handleRouterRead(deps, res);
+      }
+      // Everything the Router tab mutates goes through the dashboard, which
+      // holds the router's virtual key. The browser must never see that key --
+      // it is the only thing between a public tunnel and real provider spend,
+      // and a dashboard is not the place a secret lives.
+      if (p === "/api/router/proxy") {
+        return await handleRouterProxy(deps, req, res);
+      }
       // ---- providers ----
       if (req.method === "GET" && p === "/api/pins") return await handlePins(deps, req, res);
       if (req.method === "POST" && p === "/api/pins") return await handlePins(deps, req, res);
@@ -1756,4 +1770,97 @@ function handleGetRouterStatus(deps: ToolDeps, res: ServerResponse): void {
 function instanceRoot(): string {
   return path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "..", "..")
     .split(path.sep).join("/");
+}
+
+/**
+ * Proxy a mutating router call, holding the virtual key server-side.
+ *
+ * The router authenticates on `Authorization: Bearer <virtual key>`, and the
+ * dashboard has no copy of it: the key is stored HASHED and was printed once at
+ * boot. So the tab cannot call the router directly, and this is the only way
+ * to change aliases or broadcast state from the UI.
+ *
+ * `target` is validated against an ALLOWLIST of router paths. A proxy that
+ * forwards an arbitrary path with a server-held credential is a confused-deputy
+ * waiting to happen, and the browser controls `target`.
+ */
+async function handleRouterProxy(deps: ToolDeps, req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const body = await readJsonBody(req).catch(() => null) as Record<string, unknown> | null;
+  if (!body || typeof body !== "object") {
+    return sendError(res, 400, "bad_request", "Body must be a JSON object", false);
+  }
+  const target = typeof body["target"] === "string" ? body["target"] : "";
+  const ALLOWED = ["/v1/aliases", "/v1/broadcast", "/v1/tunnel"];
+  if (!ALLOWED.some((a) => target === a || target.startsWith(`${a}/`))) {
+    return sendError(res, 400, "bad_request", `target must be one of: ${ALLOWED.join(", ")}`, false);
+  }
+
+  const cfg = readConfig(deps.db);
+  const port = cfg ? Number(cfg.port) : 4800;
+  const host = cfg ? String(cfg.bind) : "127.0.0.1";
+  if (host !== "127.0.0.1" && host !== "localhost") {
+    return sendError(res, 400, "bad_request", `router is bound to ${host}; the dashboard only proxies loopback`, false);
+  }
+
+  // The key, if one was supplied at start-up. Without it the proxy cannot
+  // authenticate, and saying so beats a confusing 401 from the router.
+  const key = process.env["NANITES_ROUTER_KEY"];
+  if (!key) {
+    return sendError(res, 503, "no_router_key",
+      "Set NANITES_ROUTER_KEY in the environment so the dashboard can talk to the router. The key is never stored, only hashed.", false);
+  }
+
+  try {
+    const upstream = await fetch(`http://127.0.0.1:${port}${target}`, {
+      method: req.method,
+      headers: {
+        authorization: `Bearer ${key}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body["payload"] ?? {}),
+      signal: AbortSignal.timeout(30_000),
+    });
+    const text = await upstream.text();
+    res.writeHead(upstream.status, { "content-type": "application/json; charset=utf-8" });
+    res.end(text);
+  } catch (err) {
+    sendError(res, 502, "router_unreachable",
+      `Could not reach the router on port ${port}: ${err instanceof Error ? err.message : String(err)}`, false);
+  }
+}
+
+/**
+ * Read-only router fetch for the dashboard tab: aliases and broadcast state.
+ *
+ * Same reasoning as the mutating proxy -- the browser has no virtual key and
+ * the router is on a different port, so it cannot call it directly. The target
+ * allowlist applies here too.
+ */
+async function handleRouterRead(deps: ToolDeps, res: ServerResponse): Promise<void> {
+  const key = process.env["NANITES_ROUTER_KEY"];
+  const cfg = readConfig(deps.db);
+  const port = cfg ? Number(cfg.port) : 4800;
+  const GETTABLE = ["/v1/aliases", "/v1/broadcast"];
+  const out: Record<string, unknown> = {};
+  if (!key) {
+    return sendJson(res, 200, {
+      error: "Set NANITES_ROUTER_KEY in the environment so the dashboard can talk to the router.",
+      aliases: { data: [] },
+      broadcast: { models: [], advertised: [] },
+    });
+  }
+  for (const target of GETTABLE) {
+    try {
+      const r = await fetch(`http://127.0.0.1:${port}${target}`, {
+        headers: { authorization: `Bearer ${key}` },
+        signal: AbortSignal.timeout(8000),
+      });
+      out[target === "/v1/aliases" ? "aliases" : "broadcast"] = await r.json();
+    } catch (err) {
+      out[target === "/v1/aliases" ? "aliases" : "broadcast"] = {
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  }
+  sendJson(res, 200, out);
 }

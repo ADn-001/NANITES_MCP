@@ -17,11 +17,12 @@ import { bearerToken, verifyVirtualKey, readConfig, updateConfig } from "./auth.
 import { detectDialect, errorFor, type Dialect } from "./dialect.js";
 import { assertOutboundUrl } from "../ui/guards.js";
 import { NanitesError } from "../helpers/errors.js";
+import { ProviderModelStore } from "../storage/providerModelStore.js";
 import { decodeAnthropicRequest, encodeAnthropicResponse } from "./inbound/anthropic.js";
 import { decodeOpenAiRequest, encodeOpenAiResponse } from "./inbound/openai.js";
 import { resolveTarget, isRoutable, type ResolvedTarget, type RoutableTarget } from "./outbound/resolve.js";
-import { listAdvertised, renderCatalog, type AdvertisedModel } from "./models/catalog.js";
-import { getAlias, walkChain, setStickyWinner, type ChainCandidate } from "./models/aliases.js";
+import { listAdvertised, renderCatalog, setAdvertised, unadvertiseModel, type AdvertisedModel } from "./models/catalog.js";
+import { getAlias, walkChain, setStickyWinner, listAliases, setAlias, deleteAlias, type ChainCandidate, type WalkResult } from "./models/aliases.js";
 import { createSseWriter } from "./stream/sse.js";
 import { createAnthropicStream, type AnthropicStreamEncoder } from "./stream/anthropicStream.js";
 import { createOpenAiStream, type OpenAiStreamEncoder } from "./stream/openaiStream.js";
@@ -369,8 +370,11 @@ async function handleInference(
   const alias = request.model.includes(":") ? null : getAlias(opts.db, request.model);
   if (alias) {
     const startAt = alias.sticky_winner ?? 0;
+    // Hoisted: the re-dispatch below needs the winning index, and a `const`
+    // declared inside the try would not survive it.
+    let walked: WalkResult<{ content: unknown; tool_calls?: unknown[] }>;
     try {
-      const walked = await walkChain(
+      walked = await walkChain(
         alias.alias,
         alias.candidates,
         startAt,
@@ -397,11 +401,23 @@ async function handleInference(
       sendError(res, dialect, statusForCode(code), code, message);
       return;
     }
-    // The chain walker returns the raw answer shape; re-dispatch the winner so
+    // The chain walker returns the raw answer shape; re-dispatch the WINNER so
     // the caller gets the full response with usage and served_by.
-    // Past the helper branch above, so this target is a real provider.
-    const target = resolveTarget(opts.db, request.model);
-    if (!isRoutable(target)) throw new Error("unreachable: a helper cannot reach the chain re-dispatch");
+    //
+    // The winner, NOT `request.model`. Resolving the alias NAME here sent the
+    // bare id into the catalog search, which reported "nanites-flash is served
+    // by more than one provider" — a model that does not exist — even though
+    // the walk had just succeeded. The sticky winner was recorded, so the chain
+    // ran correctly and only the RESPONSE was mis-resolved.
+    const winner = alias.candidates[walked.winner]!;
+    const target: RoutableTarget = {
+      provider: winner.provider as never,
+      endpoint: winner.endpoint ?? null,
+      model_id: winner.model_id,
+      stored_id: winner.endpoint
+        ? `${winner.provider}:${winner.endpoint}:${winner.model_id}`
+        : `${winner.provider}:${winner.model_id}`,
+    };
     const response = await dispatchWithFailover({ db: opts.db, target, request });
     const payload = anthropicPath
       ? encodeAnthropicResponse(response, `msg_${randomUUID()}`)
@@ -977,6 +993,176 @@ async function handle(
     }
   }
 
+  // --- aliases: named chains of models ---
+  //
+  // The store, the walker and the failure taxonomy were all built and tested
+  // with NO way to reach them: `setAlias` was called from tests and nowhere
+  // else, so a user could not create the thing the router is for. These routes
+  // are the missing product path, not new logic.
+  if (pathname === "/v1/aliases" || pathname === "/v1/aliases/") {
+    if (req.method === "GET") {
+      sendJson(res, 200, { object: "list", data: listAliases(opts.db) });
+      return;
+    }
+    if (req.method === "POST") {
+      let body: { alias?: unknown; candidates?: unknown };
+      try {
+        body = JSON.parse(await readBodyText(req)) as typeof body;
+      } catch {
+        sendError(res, dialect, 400, "router_invalid_request", "Body must be JSON.");
+        return;
+      }
+      const alias = typeof body.alias === "string" ? body.alias.trim() : "";
+      if (!alias) {
+        sendError(res, dialect, 400, "router_invalid_request", "`alias` is required.");
+        return;
+      }
+      // A colon or slash in the name is the exact problem aliasing exists to
+      // solve, so refuse it rather than let it become unaddressable.
+      if (/[:/\s]/.test(alias)) {
+        sendError(res, dialect, 400, "router_invalid_request",
+          `Alias "${alias}" may not contain a colon, slash, or whitespace.`);
+        return;
+      }
+      if (!Array.isArray(body.candidates)) {
+        sendError(res, dialect, 400, "router_invalid_request", "`candidates` must be an array.");
+        return;
+      }
+      const candidates: ChainCandidate[] = [];
+      for (const [i, raw] of body.candidates.entries()) {
+        const c = raw as Record<string, unknown>;
+        if (!c || typeof c.provider !== "string" || typeof c.model_id !== "string") {
+          sendError(res, dialect, 400, "router_invalid_request",
+            `candidates[${i}] needs { provider, model_id }.`);
+          return;
+        }
+        // Only provider and model_id: the chain order IS the policy, and
+        // per-candidate token or temperature overrides are deliberately not
+        // exposed.
+        candidates.push({
+          provider: c.provider,
+          model_id: c.model_id,
+          ...(typeof c.endpoint === "string" ? { endpoint: c.endpoint } : {}),
+        });
+      }
+      try {
+        // Validates every candidate against the catalog at WRITE time, so a
+        // typo is a 400 now rather than a mystery walk days later.
+        const def = setAlias(opts.db, alias, candidates);
+        sendJson(res, 200, { object: "alias", ...def });
+      } catch (err) {
+        const code = (err as { code?: string }).code ?? "router_invalid_request";
+        sendError(res, dialect, code === "alias_candidate_unknown" ? 400 : statusForCode(code), code, (err as Error).message);
+      }
+      return;
+    }
+  }
+
+  const aliasItem = /^\/v1\/aliases\/([^/]+)\/?$/.exec(pathname);
+  if (aliasItem && req.method === "DELETE") {
+    const name = decodeURIComponent(aliasItem[1]!);
+    const removed = deleteAlias(opts.db, name);
+    if (!removed) {
+      sendError(res, dialect, 404, "alias_unknown", `No alias named "${name}".`);
+      return;
+    }
+    sendJson(res, 200, { deleted: name });
+    return;
+  }
+  if (aliasItem && req.method === "GET") {
+    const def = getAlias(opts.db, decodeURIComponent(aliasItem[1]!));
+    if (!def) {
+      sendError(res, dialect, 404, "alias_unknown", `No alias named "${aliasItem[1]}".`);
+      return;
+    }
+    sendJson(res, 200, { object: "alias", ...def });
+    return;
+  }
+
+  // --- broadcast: which models /v1/models advertises ---
+  //
+  // The catalog table existed and was served, with no way to put anything in
+  // it or take anything out, so the advertised list was permanently empty and
+  // every harness saw zero models. Broadcast is INDEPENDENT of alias chains: a
+  // hidden model can still be a chain candidate, and a chain can name a model
+  // that is not broadcast.
+  if (pathname === "/v1/broadcast" || pathname === "/v1/broadcast/") {
+    if (req.method === "GET") {
+      const store = new ProviderModelStore(opts.db);
+      let registered: Array<{ provider: string; model_id: string }> = [];
+      try {
+        registered = store
+          .listModels(routerProfile())
+          .filter((m) => m.is_registered)
+          .map((m) => ({ provider: m.provider, model_id: m.model_id }));
+      } catch { /* a fresh install may have no catalog yet */ }
+      const on = new Map(listAdvertised(opts.db).map((m) => [m.real_id, m]));
+      sendJson(res, 200, {
+        // The candidate list the UI needs to draw its toggles, so the browser
+        // never has to guess what exists.
+        models: registered.map((m) => {
+          const published = on.get(m.model_id);
+          return {
+            provider: m.provider,
+            model_id: m.model_id,
+            on: Boolean(published),
+            alias: published?.alias ?? null,
+          };
+        }),
+        advertised: listAdvertised(opts.db),
+      });
+      return;
+    }
+    if (req.method === "POST") {
+      let body: { model_id?: unknown; provider?: unknown; on?: unknown; alias?: unknown };
+      try {
+        body = JSON.parse(await readBodyText(req)) as typeof body;
+      } catch {
+        sendError(res, dialect, 400, "router_invalid_request", "Body must be JSON.");
+        return;
+      }
+      const provider = typeof body.provider === "string" ? body.provider : "";
+      const modelId = typeof body.model_id === "string" ? body.model_id : "";
+      if (!provider || !modelId) {
+        sendError(res, dialect, 400, "router_invalid_request", "provider and model_id are required.");
+        return;
+      }
+      // The catalog stores the BARE model id, namespaced only for the
+      // `getModel` lookup. Passing `provider:model_id` here is what made
+      // setAdvertised report "not in the catalog" for a model that is
+      // registered, under both providers.
+      const realId = modelId;
+      try {
+        if (body.on === false) {
+          // Turning it off removes the published name. The underlying model
+          // row is untouched — broadcast controls visibility, not registration.
+          //
+          // Look the name up by real_id first: `deleteAdvertised` is keyed on
+          // the ALIAS, so deleting by model id silently matched nothing and the
+          // endpoint reported success while /v1/models kept listing the model.
+          const removedAlias = unadvertiseModel(opts.db, modelId, provider);
+          sendJson(res, 200, { on: false, model_id: modelId, removed: Boolean(removedAlias) });
+          return;
+        }
+        // Published under the model's own id, or a custom name the user chose.
+        const alias = typeof body.alias === "string" && body.alias.trim()
+          ? body.alias.trim()
+          : safePublishedName(modelId);
+        const def = setAdvertised(opts.db, {
+          alias,
+          realId,
+          provider,
+          modalities: ["text"],
+        });
+        sendJson(res, 200, { on: true, model_id: modelId, ...def });
+      } catch (err) {
+        const code = (err as { code?: string }).code ?? "router_invalid_request";
+        sendError(res, dialect, code === "alias_candidate_unknown" ? 400 : statusForCode(code), code, (err as Error).message);
+      }
+      return;
+    }
+  }
+
   if (req.method === "GET" && (pathname === "/v1/keys" || pathname === "/v1/keys/")) {
     // Aggregate health per provider key. No secrets, and no per-key metrics
     // yet — those land in R3.
@@ -1041,4 +1227,25 @@ export async function startRouterServer(opts: RouterServerOptions): Promise<Rout
         server.close(() => resolve());
       }),
   };
+}
+
+/**
+ * A published name derived from a provider model id.
+ *
+ * A model id is not a name: `@cf/deepseek-ai/deepseek-r1-distill-qwen-32b`
+ * contains slashes and an `@`, and the catalog deliberately refuses those,
+ * because the published name is what a client sends BACK and
+ * `cf/deepseek-ai/...` is not addressable. Using the raw id as the fallback
+ * made the plainest possible broadcast -- no custom name -- fail with a 500.
+ *
+ * Deterministic, so toggling a model twice publishes the same name and
+ * re-hiding it finds that name again.
+ */
+export function safePublishedName(modelId: string): string {
+  const cleaned = String(modelId)
+    .replace(/^@/, "")
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  return cleaned || "model";
 }

@@ -1031,6 +1031,55 @@
     </div>
 
     <div class="panel">
+      <p class="panel-title"><span class="phos-only">Endpoints</span><span class="retro-only">Endpoints</span><span class="claude-only">Endpoints</span> <span class="panel-tag phos-only">CONNECT</span><span class="panel-tag retro-only">Connect</span><span class="panel-tag claude-only">Connect</span></p>
+      <p style="font-size:11px; color:var(--text-muted); margin:0 0 12px;">
+        The address clients send requests to. Read-only &mdash; changing the bind address is a server start-up setting, not something to edit while it is running.
+      </p>
+      <div class="grid-2" style="gap:12px;">
+        <div class="field">
+          <label>Local endpoint</label>
+          <div style="display:flex; gap:6px; align-items:center;">
+            <input type="text" id="rtLocalUrl" readonly style="font-family:ui-monospace,monospace; font-size:12px;">
+            <button class="btn" id="rtCopyLocal" style="flex:none;">Copy</button>
+          </div>
+        </div>
+        <div class="field">
+          <label>Public tunnel</label>
+          <div style="display:flex; gap:6px; align-items:center;">
+            <input type="text" id="rtTunnelUrl" readonly placeholder="not started" style="font-family:ui-monospace,monospace; font-size:12px;">
+            <button class="btn" id="rtCopyTunnel" style="flex:none;" disabled>Copy</button>
+          </div>
+          <div class="row" style="margin-top:8px; justify-content:flex-start;">
+            <button class="btn" id="rtStartTunnel">Start tunnel</button>
+            <span id="rtTunnelMsg" style="font-size:11px; color:var(--text-muted);"></span>
+          </div>
+          <div id="rtTunnelWarn" style="display:none; margin-top:8px; font-size:11px; color:var(--warn);"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <p class="panel-title"><span class="phos-only">Broadcast Models</span><span class="retro-only">Broadcast</span><span class="claude-only">Broadcast</span> <span class="panel-tag phos-only">CATALOG</span><span class="panel-tag retro-only">Catalog</span><span class="panel-tag claude-only">Catalog</span></p>
+      <p style="font-size:11px; color:var(--text-muted); margin:0 0 12px;">
+        What <code>GET /v1/models</code> advertises. A harness reads this to build its model picker, so a model you leave off here is a model no client will offer. Independent of chains: a hidden model can still be a chain candidate.
+      </p>
+      <div id="rtBroadcast" style="font-size:13px;"><span style="color:var(--text-muted);">loading&hellip;</span></div>
+    </div>
+
+    <div class="panel">
+      <p class="panel-title"><span class="phos-only">Model Chains</span><span class="retro-only">Chains</span><span class="claude-only">Chains</span> <span class="panel-tag phos-only">ALIASES</span><span class="panel-tag retro-only">Aliases</span><span class="panel-tag claude-only">Aliases</span></p>
+      <p style="font-size:11px; color:var(--text-muted); margin:0 0 12px;">
+        A custom name that stands for an ordered list of models. A request starts at the last model that worked, falls through the list, and wraps to the top. The order you set IS the priority.
+      </p>
+      <div id="rtAliases" style="font-size:13px;"><span style="color:var(--text-muted);">loading&hellip;</span></div>
+      <div class="row" style="justify-content:flex-start; margin-top:14px;">
+        <input type="text" id="rtNewAlias" placeholder="nanites-flash" style="font-family:ui-monospace,monospace; font-size:12px; max-width:220px;">
+        <button class="btn primary" id="rtCreateAlias">Create chain</button>
+      </div>
+      <div id="rtAliasMsg" style="font-size:11px; color:var(--text-muted); margin-top:8px;"></div>
+    </div>
+
+    <div class="panel">
       <p class="panel-title"><span class="phos-only">Helper Models</span><span class="retro-only">Helper Models</span><span class="claude-only">Helper Models</span> <span class="panel-tag phos-only">LOCAL</span><span class="panel-tag retro-only">Local</span><span class="panel-tag claude-only">Local</span></p>
       <p style="font-size:11px; color:var(--text-muted); margin:0 0 12px;">
         Optional on-device models used by the gateway. No cloud key, no per-token cost, nothing leaves the machine &mdash; but a model is loaded into memory while on. Every feature defaults OFF. Turning the master switch off stops any request from using them; the running gateway releases the loaded model on restart, or immediately via <code>PATCH /v1/config</code>.
@@ -3033,7 +3082,236 @@ async function loadHelperConfig(){
       : 'Off. No request will use a helper model.';
   } catch { /* panel stays inert rather than showing a wrong state */ }
   loadRouterStatus();
+  loadModelBroadcast();
+  loadAliases();
+  paintLocalUrl();
 }
+
+/* ---------- Router tab: endpoints, broadcast, chains ---------- */
+
+// The local endpoint is DISPLAY, not an input. Changing the bind address is a
+// start-up setting; offering an editable box that silently does nothing on
+// save would be worse than no box at all.
+function paintLocalUrl() {
+  const el = document.getElementById('rtLocalUrl');
+  if (el) el.value = location.protocol + '//' + location.hostname + ':4800';
+}
+
+async function copyToClipboard(text, btn) {
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // The Clipboard API needs a secure context; fall back to a selection the
+    // user can copy by hand rather than failing silently.
+    const t = document.createElement('textarea');
+    t.value = text;
+    document.body.appendChild(t);
+    t.select();
+    try { document.execCommand('copy'); } catch { /* give up quietly */ }
+    t.remove();
+  }
+  if (btn) {
+    const was = btn.textContent;
+    btn.textContent = 'Copied';
+    setTimeout(() => { btn.textContent = was; }, 1200);
+  }
+}
+
+// Every mutating call goes through the dashboard proxy, which holds the
+// router's virtual key. The browser never sees that key.
+async function routerCall(method, target, payload) {
+  const res = await fetch('/api/router/proxy', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target, payload, method }),
+  });
+  const body = await res.json().catch(() => null);
+  return { ok: res.ok, status: res.status, body };
+}
+
+async function routerGet(path) {
+  // Through the dashboard, not directly: the router is on a different port
+  // (so the browser's request is cross-origin) and needs the virtual key,
+  // which the page must never hold.
+  const key = path.indexOf('/v1/broadcast') === 0 ? 'broadcast' : 'aliases';
+  const res = await fetch('/api/router/read').catch(() => null);
+  if (!res || !res.ok) throw new Error('router unreachable');
+  const body = await res.json();
+  if (body.error) throw new Error(body.error);
+  return body[key];
+}
+
+async function loadModelBroadcast() {
+  const box = document.getElementById('rtBroadcast');
+  if (!box) return;
+  try {
+    const d = await routerGet('/v1/broadcast');
+    // Group by provider, so a 15-model list stays readable.
+    const byProvider = {};
+    for (const m of d.models) (byProvider[m.provider] = byProvider[m.provider] || []).push(m);
+    const groups = Object.keys(byProvider);
+    box.innerHTML = groups.map(function (prov) {
+      const models = byProvider[prov];
+      return '<div style="margin-bottom:10px;">'
+        + '<span class="panel-tag" style="display:inline-block; margin-bottom:6px;">' + esc(prov) + '</span>'
+        + models.map(function (m, i) {
+            return '<div style="display:flex; align-items:center; gap:8px; padding:3px 0;">'
+              + '<label class="switch-row" for="bc-' + esc(prov) + '-' + i + '" style="margin:0;">'
+              + '<span class="switch"><input type="checkbox" id="bc-' + esc(prov) + '-' + i + '" data-bc="1"'
+              + ' data-provider="' + esc(m.provider) + '" data-model="' + esc(m.model_id) + '"'
+              + (m.on ? ' checked' : '') + '></span></label>'
+              + '<span style="font-family:ui-monospace,monospace; font-size:11.5px;">' + esc(m.model_id) + '</span>'
+              + (m.alias ? '<span class="panel-tag" style="margin:0;">as ' + esc(m.alias) + '</span>' : '')
+              + '</div>';
+          }).join('')
+        + '</div>';
+    }).join('') || '<span style="color:var(--text-muted);">No registered models. Run discovery first.</span>';
+
+    box.querySelectorAll('input[data-bc]').forEach(function (el) {
+      el.addEventListener('change', async function () {
+        const provider = el.dataset.provider;
+        const model_id = el.dataset.model;
+        const on = el.checked;
+        const r = await routerCall('POST', '/v1/broadcast', { provider, model_id, on });
+        if (!r.ok) {
+          el.checked = !on;
+          alert('Could not update broadcast: ' + ((r.body && r.body.message) || r.status));
+          return;
+        }
+        loadAliases();
+      });
+    });
+  } catch (e) {
+    box.innerHTML = '<span style="color:var(--warn);">Could not load: ' + esc(String(e.message || e)) + '</span>';
+  }
+}
+
+async function loadAliases() {
+  const box = document.getElementById('rtAliases');
+  if (!box) return;
+  let candidates = [];
+  let data = { data: [] };
+  try {
+    const b = await routerGet('/v1/broadcast');
+    candidates = b.models.map(function (m) {
+      return { label: m.provider + ':' + m.model_id, provider: m.provider, model_id: m.model_id };
+    });
+    data = await routerGet('/v1/aliases');
+  } catch (e) {
+    box.innerHTML = '<span style="color:var(--warn);">Could not load: ' + esc(String(e.message || e)) + '</span>';
+    return;
+  }
+
+  const chains = data.data || [];
+  box.innerHTML = chains.map(function (a) {
+    const opts = candidates.map(function (c) {
+      return '<option value="' + esc(c.provider) + '|' + esc(c.model_id) + '">' + esc(c.label) + '</option>';
+    }).join('');
+    return '<div style="border:1px solid var(--border); border-radius:8px; padding:10px; margin-bottom:10px;">'
+      + '<div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">'
+      + '<b style="font-family:ui-monospace,monospace;">' + esc(a.alias) + '</b>'
+      + '<button class="btn" data-del-alias="' + esc(a.alias) + '">Delete</button>'
+      + '</div>'
+      + '<ol style="margin:8px 0 0; padding-left:20px; font-size:12px; color:var(--text-muted);">'
+      + a.candidates.map(function (c, i) {
+          return '<li>' + esc(c.provider) + ':' + esc(c.model_id)
+            + (a.sticky_winner === i ? ' <span class="panel-tag" style="margin:0;">last good</span>' : '')
+            + '</li>';
+        }).join('')
+      + '</ol>'
+      + '<div class="row" style="justify-content:flex-start; margin-top:8px; gap:6px;">'
+      + '<select data-add-model="' + esc(a.alias) + '" style="flex:1; font-size:11.5px;">'
+      + '<option value="">add a model to the end…</option>' + opts
+      + '</select>'
+      + '<button class="btn" data-clear-chain="' + esc(a.alias) + '">Clear</button>'
+      + '</div></div>';
+  }).join('') || '<span style="color:var(--text-muted);">No chains yet. Create one below.</span>';
+
+  // Append a model to the end of a chain. Order of appending IS the priority
+  // order, so there is no separate sort control to get out of sync.
+  box.querySelectorAll('select[data-add-model]').forEach(function (sel) {
+    sel.addEventListener('change', async function () {
+      if (!sel.value) return;
+      const alias = sel.dataset.addModel;
+      const parts = sel.value.split('|');
+      const cur = (chains.find(function (a) { return a.alias === alias; }) || { candidates: [] }).candidates;
+      const r = await routerCall('POST', '/v1/aliases', {
+        alias: alias,
+        candidates: cur.concat([{ provider: parts[0], model_id: parts[1] }]),
+      });
+      if (!r.ok) alert('Could not update chain: ' + ((r.body && r.body.message) || r.status));
+      loadAliases();
+    });
+  });
+
+  box.querySelectorAll('button[data-del-alias]').forEach(function (btn) {
+    btn.addEventListener('click', async function () {
+      const alias = btn.dataset.delAlias;
+      if (!confirm('Delete chain "' + alias + '"? Clients calling that name will error until another chain takes the name.')) return;
+      const r = await routerCall('DELETE', '/v1/aliases/' + encodeURIComponent(alias), {});
+      if (!r.ok) alert('Delete failed: ' + ((r.body && r.body.message) || r.status));
+      loadAliases();
+    });
+  });
+
+  box.querySelectorAll('button[data-clear-chain]').forEach(function (btn) {
+    btn.addEventListener('click', async function () {
+      const alias = btn.dataset.clearChain;
+      const chain = chains.find(function (a) { return a.alias === alias; });
+      const keep = (chain ? chain.candidates[0] : null);
+      const r = await routerCall('POST', '/v1/aliases', {
+        alias: alias,
+        candidates: keep ? [keep] : [],
+      });
+      if (!r.ok) alert('Could not clear: ' + ((r.body && r.body.message) || r.status));
+      loadAliases();
+    });
+  });
+}
+
+document.getElementById('rtCopyLocal')?.addEventListener('click', function (e) {
+  copyToClipboard(document.getElementById('rtLocalUrl')?.value, e.target);
+});
+document.getElementById('rtCopyTunnel')?.addEventListener('click', function (e) {
+  copyToClipboard(document.getElementById('rtTunnelUrl')?.value, e.target);
+});
+
+document.getElementById('rtStartTunnel')?.addEventListener('click', async function (e) {
+  const btn = e.target;
+  const msg = document.getElementById('rtTunnelMsg');
+  const warn = document.getElementById('rtTunnelWarn');
+  btn.disabled = true;
+  btn.textContent = 'Starting…';
+  msg.textContent = '';
+  const r = await routerCall('POST', '/v1/tunnel', {});
+  btn.disabled = false;
+  btn.textContent = 'Start tunnel';
+  if (r.ok && r.body && r.body.url) {
+    document.getElementById('rtTunnelUrl').value = r.body.url;
+    document.getElementById('rtCopyTunnel').disabled = false;
+    msg.textContent = 'Live.';
+    // Said here as well as at server start-up, because a URL sitting in a
+    // textbox reads as ordinary and this one is not: a public endpoint with
+    // real provider spend behind it, and a virtual key as the only barrier.
+    warn.style.display = '';
+    warn.textContent = 'Anyone with this URL can reach the gateway and spend your provider credit. Restart the router to take it down.';
+  } else {
+    msg.textContent = 'Failed: ' + ((r.body && (r.body.message || r.body.error)) || r.status);
+  }
+});
+
+document.getElementById('rtCreateAlias')?.addEventListener('click', async function () {
+  const input = document.getElementById('rtNewAlias');
+  const msg = document.getElementById('rtAliasMsg');
+  const alias = input.value.trim();
+  if (!alias) { msg.textContent = 'Give the chain a name first.'; return; }
+  const r = await routerCall('POST', '/v1/aliases', { alias: alias, candidates: [] });
+  if (!r.ok) { msg.textContent = 'Could not create: ' + ((r.body && r.body.message) || r.status); return; }
+  input.value = '';
+  msg.textContent = 'Created "' + alias + '". Add models below — the order you add them is the order they are tried.';
+  loadAliases();
+});
 
 const setText = (id, v) => { const el = document.getElementById(id); if(el) el.textContent = v; };
 

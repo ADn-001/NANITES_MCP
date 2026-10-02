@@ -161,3 +161,20 @@ export function renderAnthropicCatalog(models: AdvertisedModel[]): Record<string
 export function renderCatalog(models: AdvertisedModel[], dialect: "anthropic" | "openai"): Record<string, unknown> {
   return dialect === "anthropic" ? renderAnthropicCatalog(models) : renderOpenAiCatalog(models);
 }
+
+/**
+ * Remove a published model by its MODEL id, whatever alias it was published
+ * under.
+ *
+ * `deleteAdvertised` is keyed on the alias, so a caller holding a model id --
+ * which is what a broadcast TOGGLE holds -- would silently delete nothing and
+ * the toggle would report success while the model stayed listed. The row is
+ * uniquely identified by (real_id, provider), which is what this uses.
+ */
+export function unadvertiseModel(db: DatabaseSync, realId: string, provider: string): string | null {
+  const row = db.prepare("SELECT alias FROM router_advertised WHERE real_id = ? AND provider = ?")
+    .get(realId, provider) as { alias: string } | undefined;
+  if (!row) return null;
+  db.prepare("DELETE FROM router_advertised WHERE alias = ?").run(row.alias);
+  return row.alias;
+}
