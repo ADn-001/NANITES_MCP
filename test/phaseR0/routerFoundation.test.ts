@@ -441,3 +441,30 @@ describe("R0 — isolation", () => {
     expect(MAX_BODY_BYTES).toBe(8 * 1024 * 1024);
   });
 });
+
+describe("the migration sequence itself", () => {
+  // Twice now a migration has been declared out of order (v28 before v27, then
+  // v30/v29 before v28). The loop skips `version <= current`, so an
+  // out-of-order entry after a higher one is never reached, the database stops
+  // short, and the ONLY symptom is `MIGRATIONS.length` disagreeing with
+  // `user_version` somewhere unrelated.
+  //
+  // This asserts the property rather than a number, so adding a migration
+  // cannot make it stale.
+  it("is declared in ascending order with no gaps", () => {
+    const versions = MIGRATIONS.map((m) => m.version);
+    expect(versions).toEqual([...versions].sort((a, b) => a - b));
+    expect(new Set(versions).size).toBe(versions.length);
+    expect(versions[0]).toBe(1);
+    for (let i = 1; i < versions.length; i++) {
+      expect(versions[i]).toBe(versions[i - 1]! + 1);
+    }
+  });
+
+  it("has a length equal to its highest version", () => {
+    // The invariant an out-of-order entry breaks. Cheap, and it names the
+    // failure rather than leaving it to surface in an unrelated test.
+    const versions = MIGRATIONS.map((m) => m.version);
+    expect(versions.length).toBe(Math.max(...versions));
+  });
+});

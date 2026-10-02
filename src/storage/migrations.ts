@@ -653,6 +653,22 @@ export const MIGRATIONS: Migration[] = [
     version: 28,
     sql: "",
   },
+  {
+    // Which published model is the auto-router's target for a modality.
+    //
+    // Its own column, not packed into the `modalities` JSON: modalities say
+    // what a model CAN do, this says what the OPERATOR chose it for. Two
+    // different facts, and mixing them makes both unreadable.
+    version: 29,
+    sql: "",
+  },
+  {
+    // Opt-in modality routing. Off by default: it silently changes which model
+    // serves a request, which is exactly the surprise an operator must opt
+    // into rather than inherit.
+    version: 30,
+    sql: "",
+  },
 ];
 
 /**
@@ -719,6 +735,10 @@ export function applyMigrations(db: DatabaseSync, home?: string): void {
             db.exec(`ALTER TABLE router_config ADD COLUMN ${name} ${decl}`);
           }
         }
+      } else if (migration.version === 30) {
+        addAutoRouteColumn(db);
+      } else if (migration.version === 29) {
+        addFallbackColumn(db);
       } else if (migration.version === 28) {
         addTrafficLogColumns(db);
       } else if (migration.version === 27) {
@@ -982,4 +1002,24 @@ function addTrafficLogColumns(db: DatabaseSync): void {
   `);
   // The export is a full table scan filtered by date; without this it is one.
   db.exec("CREATE INDEX IF NOT EXISTS idx_traffic_created ON router_traffic (created_at)");
+}
+
+/** Idempotent, following the same pattern as 14/15/16/26/28. */
+function addFallbackColumn(db: DatabaseSync): void {
+  const have = new Set(
+    (db.prepare("PRAGMA table_info(router_advertised)").all() as Array<{ name: string }>).map((c) => c.name),
+  );
+  if (!have.has("fallback_for")) {
+    db.exec("ALTER TABLE router_advertised ADD COLUMN fallback_for TEXT");
+  }
+}
+
+/** Idempotent, like every other column-adding migration here. */
+function addAutoRouteColumn(db: DatabaseSync): void {
+  const have = new Set(
+    (db.prepare("PRAGMA table_info(router_config)").all() as Array<{ name: string }>).map((c) => c.name),
+  );
+  if (!have.has("auto_route_modality")) {
+    db.exec("ALTER TABLE router_config ADD COLUMN auto_route_modality INTEGER NOT NULL DEFAULT 0");
+  }
 }

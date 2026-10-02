@@ -35,12 +35,23 @@ export interface AdvertisedModel {
    * before the field existed still read as plain models.
    */
   kind?: "model" | "chain";
+  /**
+   * When set, this published model is the user's chosen FALLBACK for that
+   * input modality, used only when auto-routing is on and the named model
+   * cannot accept what the request carries.
+   *
+   * "Best vision model" is a judgement about cost, latency and quality that
+   * only the operator can make, so the router does not guess one.
+   */
+  fallback_for?: Modality;
   /** Candidates, when this is a chain. Not persisted. */
   chain?: ChainCandidate[];
 }
 
 interface AdvertisedRow {
   alias: string;
+  /** Absent on rows written before migration 29; treated as "not a fallback". */
+  fallback_for?: string | null;
   real_id: string;
   provider: string;
   modalities: string;
@@ -62,7 +73,12 @@ function rowToModel(row: AdvertisedRow): AdvertisedModel {
     modalities: Array.isArray(mods) ? (mods as Modality[]) : ["text"],
     context_window: row.context_window === null ? null : Number(row.context_window),
     created_at: row.created_at,
+    ...(isModality(row.fallback_for) ? { fallback_for: row.fallback_for } : {}),
   };
+}
+
+function isModality(x: unknown): x is Modality {
+  return x === "text" || x === "image" || x === "audio" || x === "video";
 }
 
 export function listAdvertised(db: DatabaseSync): AdvertisedModel[] {
@@ -88,6 +104,8 @@ export function setAdvertised(db: DatabaseSync, args: {
   provider: string;
   modalities?: Modality[];
   contextWindow?: number | null;
+  /** Mark this as the auto-router's target for that modality. */
+  fallbackFor?: Modality;
 }): AdvertisedModel {
   const alias = args.alias.trim();
   if (!alias) {
@@ -118,12 +136,16 @@ export function setAdvertised(db: DatabaseSync, args: {
   const contextWindow = args.contextWindow ?? known.context_window ?? null;
 
   db.prepare(
-    `INSERT INTO router_advertised (alias, real_id, provider, modalities, context_window, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)
+    `INSERT INTO router_advertised (alias, real_id, provider, modalities, context_window, created_at, fallback_for)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (alias) DO UPDATE SET
        real_id = excluded.real_id, provider = excluded.provider,
-       modalities = excluded.modalities, context_window = excluded.context_window`,
-  ).run(alias, args.realId, args.provider, JSON.stringify(modalities), contextWindow, nowIso());
+       modalities = excluded.modalities, context_window = excluded.context_window,
+       fallback_for = excluded.fallback_for`,
+  ).run(
+    alias, args.realId, args.provider, JSON.stringify(modalities),
+    contextWindow, nowIso(), args.fallbackFor ?? null,
+  );
 
   return getAdvertised(db, alias)!;
 }

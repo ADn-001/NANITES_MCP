@@ -133,6 +133,9 @@ export interface RouterConfigRow {
   feature_laya_preflight: number;
   feature_laya_postflight: number;
   /** 1 = record inbound requests to router_traffic. Off by default. */
+  /** 1 = route a request to the operator's published fallback when the named
+   *  model cannot accept what the request carries. 0 = refuse instead. */
+  auto_route_modality: number;
   traffic_log_enabled: number;
   /** Per-record character cap for the logged text. */
   traffic_log_max_chars: number;
@@ -172,6 +175,7 @@ function rowToConfig(row: Record<string, unknown>): RouterConfigRow {
     feature_structured_output: num(row.feature_structured_output),
     feature_laya_preflight: num(row.feature_laya_preflight),
     feature_laya_postflight: num(row.feature_laya_postflight),
+    auto_route_modality: num(row.auto_route_modality),
     traffic_log_enabled: num(row.traffic_log_enabled),
     traffic_log_max_chars: num(row.traffic_log_max_chars) || 4000,
     tunnel_enabled: Number(row.tunnel_enabled),
@@ -229,6 +233,7 @@ const WRITABLE_FLAGS = [
   // switch: a setting that changes what the router writes to disk, writable
   // only by someone holding the virtual key.
   "traffic_log_enabled",
+  "auto_route_modality",
 ] as const;
 
 export type WritableFlag = (typeof WRITABLE_FLAGS)[number];

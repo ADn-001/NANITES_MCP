@@ -34,7 +34,7 @@ import { helperStatus, warmHelpers, awaitProbeHelpers, guessModality, helperFeat
 import { HELPER_FEATURE_NAMES, type HelperFeature } from "./helpers/features.js";
 import { runJob } from "./jobs/runner.js";
 import { needsRunPath, dispatchCfRun, toIRResponse, cfCategoryModality } from "./outbound/cloudflareRun.js";
-import type { IRRequest } from "./ir/types.js";
+import type { IRRequest, Modality } from "./ir/types.js";
 import { countTokens } from "../helpers/tokenize.js";
 import { partsToText } from "./ir/types.js";
 
@@ -54,6 +54,7 @@ function estimateInputTokens(request: IRRequest): number {
 import { dispatchWithFailover } from "./outbound/dispatch.js";
 import { routerProfile } from "./constants.js";
 import { providerKeyCounts } from "./providers/inventory.js";
+import { capabilityFor, requestInputKinds, unsupportedKinds, modelsAccepting, configuredTargetFor } from "./providers/capability.js";
 import { logRequest, exportTraffic, trafficStats, setTrafficLog, trafficLogEnabled } from "./trafficLog.js";
 
 /** Distinct from the dashboard's 4700 so both can run simultaneously. */
@@ -184,6 +185,12 @@ function configPayload(db: DatabaseSync): Record<string, unknown> {
   return {
     enable_helpers: Boolean(c?.enable_helpers),
     enable_model_repair: Boolean(c?.enable_model_repair),
+    // The routing switch. It was missing here, so the ModalIty Routing panel
+    // read `undefined` and rendered the toggle off even when it was on -- the
+    // same class of bug as the row mapper dropping a column: an explicit
+    // object silently omits a field the type declares.
+    auto_route_modality: Boolean(c?.auto_route_modality),
+    traffic_log_enabled: Boolean(c?.traffic_log_enabled),
     features,
     availability,
     helpers: helperStatus(db),
@@ -464,6 +471,47 @@ async function handleInference(
   if (!isRoutable(target)) {
     sendError(res, dialect, 400, "alias_unknown", `"${request.model}" is not a dispatchable model.`);
     return;
+  }
+
+  // --- modality gate -------------------------------------------------------
+  //
+  // A model that cannot accept a medium is never given one, and this runs
+  // BEFORE dispatch so the base64 cannot reach a provider as prose -- which is
+  // how a text-only model once answered "The text you've provided appears to
+  // be a Base64-encoded image": confident, wrong, and billed.
+  {
+    const kinds = requestInputKinds(request.messages.map((m) => m.content));
+    if (kinds.length > 0) {
+      const cap = capabilityFor(opts.db, target.provider, target.model_id);
+      const bad = unsupportedKinds(cap, kinds);
+      if (bad.length > 0) {
+        const autoOn = readConfig(opts.db)?.auto_route_modality === 1;
+        const fallback = autoOn ? configuredTargetFor(opts.db, bad[0]!) : null;
+        if (fallback) {
+          // The operator published a target for this modality AND asked for
+          // routing, so honour it. The response carries the model that
+          // actually served, which is how a caller finds out.
+          request = { ...request, model: fallback.alias };
+          target.provider = fallback.provider as never;
+          target.endpoint = null;
+          target.model_id = fallback.model_id;
+          target.stored_id = `${fallback.provider}:${fallback.model_id}`;
+        } else {
+          const alternatives = modelsAccepting(opts.db, bad, 5);
+          sendError(
+            res, dialect, 400, "modality_unsupported",
+            `"${request.model}" cannot accept ${bad.join(" or ")} input.`
+            + (alternatives.length
+              ? ` Models that can: ${alternatives.map((a) => `${a.provider}:${a.model_id}`).join(", ")}.`
+              : " No registered model accepts it — run discovery, or register a vision or audio model.")
+            + (autoOn
+              ? " Auto-routing is on, but no model is published as the fallback for this modality."
+              : " Turn on auto-routing, or publish a model as this modality's fallback, to have the router route it for you."),
+          );
+          return;
+        }
+      }
+    }
   }
 
   // A Cloudflare model outside the chat-completions shim goes to /ai/run,
@@ -1122,11 +1170,18 @@ async function handle(
         // never has to guess what exists.
         models: registered.map((m) => {
           const published = on.get(m.model_id);
+          const cap = capabilityFor(opts.db, m.provider, m.model_id);
           return {
             provider: m.provider,
             model_id: m.model_id,
             on: Boolean(published),
             alias: published?.alias ?? null,
+            // What the UI needs to label a row honestly and to offer the
+            // right fallback control.
+            accepts: cap.accepts,
+            produces: cap.produces,
+            via_ai_run: cap.viaAiRun,
+            fallback_for: published?.fallback_for ?? null,
           };
         }),
         advertised: listAdvertised(opts.db),
@@ -1134,7 +1189,7 @@ async function handle(
       return;
     }
     if (req.method === "POST") {
-      let body: { model_id?: unknown; provider?: unknown; on?: unknown; alias?: unknown };
+      let body: { model_id?: unknown; provider?: unknown; on?: unknown; alias?: unknown; fallback_for?: unknown };
       try {
         body = JSON.parse(await readBodyText(req)) as typeof body;
       } catch {
@@ -1168,13 +1223,26 @@ async function handle(
         const alias = typeof body.alias === "string" && body.alias.trim()
           ? body.alias.trim()
           : safePublishedName(modelId);
+        // The model's REAL capabilities, from the probed registry. Hardcoding
+        // ["text"] advertised image and TTS models as text models, which is
+        // the one thing the catalog must never do.
+        const cap = capabilityFor(opts.db, provider, modelId);
+        const wantsFallback = body.fallback_for === true || typeof body.fallback_for === "string";
+        const fallbackFor = typeof body.fallback_for === "string"
+          ? body.fallback_for as Modality
+          : body.fallback_for === true
+            // Default to the non-text capability this model uniquely offers.
+            ? (cap.produces.find((m) => m !== "text") ?? undefined)
+            : undefined;
+
         const def = setAdvertised(opts.db, {
           alias,
           realId,
           provider,
-          modalities: ["text"],
+          modalities: cap.accepts.length ? cap.accepts : ["text"],
+          fallbackFor,
         });
-        sendJson(res, 200, { on: true, model_id: modelId, ...def });
+        sendJson(res, 200, { on: true, model_id: modelId, capability: cap, ...def });
       } catch (err) {
         const code = (err as { code?: string }).code ?? "router_invalid_request";
         sendError(res, dialect, code === "alias_candidate_unknown" ? 400 : statusForCode(code), code, (err as Error).message);

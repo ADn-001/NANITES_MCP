@@ -1790,7 +1790,7 @@ async function handleRouterProxy(deps: ToolDeps, req: IncomingMessage, res: Serv
     return sendError(res, 400, "bad_request", "Body must be a JSON object", false);
   }
   const target = typeof body["target"] === "string" ? body["target"] : "";
-  const ALLOWED = ["/v1/aliases", "/v1/broadcast", "/v1/tunnel"];
+  const ALLOWED = ["/v1/aliases", "/v1/broadcast", "/v1/tunnel", "/v1/config"];
   if (!ALLOWED.some((a) => target === a || target.startsWith(`${a}/`))) {
     return sendError(res, 400, "bad_request", `target must be one of: ${ALLOWED.join(", ")}`, false);
   }
@@ -1840,7 +1840,7 @@ async function handleRouterRead(deps: ToolDeps, res: ServerResponse): Promise<vo
   const key = process.env["NANITES_ROUTER_KEY"];
   const cfg = readConfig(deps.db);
   const port = cfg ? Number(cfg.port) : 4800;
-  const GETTABLE = ["/v1/aliases", "/v1/broadcast"];
+  const GETTABLE = ["/v1/aliases", "/v1/broadcast", "/v1/config"];
   const out: Record<string, unknown> = {};
   if (!key) {
     return sendJson(res, 200, {
@@ -1855,9 +1855,10 @@ async function handleRouterRead(deps: ToolDeps, res: ServerResponse): Promise<vo
         headers: { authorization: `Bearer ${key}` },
         signal: AbortSignal.timeout(8000),
       });
-      out[target === "/v1/aliases" ? "aliases" : "broadcast"] = await r.json();
+      const key2 = target === "/v1/aliases" ? "aliases" : target === "/v1/broadcast" ? "broadcast" : "config";
+      out[key2] = await r.json();
     } catch (err) {
-      out[target === "/v1/aliases" ? "aliases" : "broadcast"] = {
+      out[target === "/v1/aliases" ? "aliases" : target === "/v1/broadcast" ? "broadcast" : "config"] = {
         error: err instanceof Error ? err.message : String(err),
       };
     }

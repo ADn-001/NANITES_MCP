@@ -1080,6 +1080,21 @@
     </div>
 
     <div class="panel">
+      <p class="panel-title"><span class="phos-only">Modality Routing</span><span class="retro-only">Modality Routing</span><span class="claude-only">Modality Routing</span> <span class="panel-tag phos-only">MEDIA</span><span class="panel-tag retro-only">Media</span><span class="panel-tag claude-only">Media</span></p>
+      <p style="font-size:11px; color:var(--text-muted); margin:0 0 12px;">
+        A request carrying an image or audio is REFUSED if the chosen model cannot take it &mdash; it is never handed media as prose. With this on, the router instead forwards to the fallback you set below. The response always names the model that actually served.
+      </p>
+      <label class="switch-row" for="cfgAutoRoute">
+        <span class="switch"><input type="checkbox" id="cfgAutoRoute"></span>
+        <span>Auto-route media to a capable model</span> <span class="panel-tag" style="margin:0;">off by default</span>
+      </label>
+      <div style="margin-top:12px;">
+        <p class="panel-tag" style="margin:0 0 6px; display:block;">Fallbacks &mdash; the model to route to</p>
+        <div id="rtFallbacks" style="font-size:12px; color:var(--text-muted);">loading&hellip;</div>
+      </div>
+    </div>
+
+    <div class="panel">
       <p class="panel-title"><span class="phos-only">Helper Models</span><span class="retro-only">Helper Models</span><span class="claude-only">Helper Models</span> <span class="panel-tag phos-only">LOCAL</span><span class="panel-tag retro-only">Local</span><span class="panel-tag claude-only">Local</span></p>
       <p style="font-size:11px; color:var(--text-muted); margin:0 0 12px;">
         Optional on-device models used by the gateway. No cloud key, no per-token cost, nothing leaves the machine &mdash; but a model is loaded into memory while on. Every feature defaults OFF. Turning the master switch off stops any request from using them; the running gateway releases the loaded model on restart, or immediately via <code>PATCH /v1/config</code>.
@@ -1334,7 +1349,7 @@ function activateTab(name){
   document.querySelectorAll('.panel-view').forEach(p=>p.classList.toggle('active', p.id === name));
   if(name === 'tab-providers') refreshProviders();
   else if(name === 'tab-errors') refreshErrors();
-  else if(name === 'tab-router'){ loadHelperConfig(); loadRouterStatus(); }
+  else if(name === 'tab-router'){ loadHelperConfig(); loadRouterStatus(); loadModelBroadcast(); loadAliases(); loadModalityRouting(); paintLocalUrl(); }
 }
 document.querySelectorAll('nav.tabbar button[data-tab]').forEach(btn=>{
   btn.addEventListener('click', ()=> activateTab(btn.dataset.tab));
@@ -1657,7 +1672,7 @@ function applyHashRoute(){
   activateTab(tab);
   if(tab === 'tab-providers') refreshProviders();
   else if(tab === 'tab-errors') refreshErrors();
-  else if(tab === 'tab-router'){ loadHelperConfig(); loadRouterStatus(); }
+  else if(tab === 'tab-router'){ loadHelperConfig(); loadRouterStatus(); loadModelBroadcast(); loadAliases(); loadModalityRouting(); paintLocalUrl(); }
   if(path === '/vox-terminus'){
     if(qs.get('maximize') === '1') setVoxMaximized(true);
     const isBtw = qs.get('mode') === 'btw';
@@ -3134,7 +3149,12 @@ async function routerGet(path) {
   // Through the dashboard, not directly: the router is on a different port
   // (so the browser's request is cross-origin) and needs the virtual key,
   // which the page must never hold.
-  const key = path.indexOf('/v1/broadcast') === 0 ? 'broadcast' : 'aliases';
+  // A three-way map, not a two-way one. `/v1/config` fell through to
+  // 'aliases' and returned an unrelated object, which is why the modality
+  // panel sat on "loading..." forever with no error anywhere.
+  const key = path.indexOf('/v1/broadcast') === 0 ? 'broadcast'
+    : path.indexOf('/v1/config') === 0 ? 'config'
+    : 'aliases';
   const res = await fetch('/api/router/read').catch(() => null);
   if (!res || !res.ok) throw new Error('router unreachable');
   const body = await res.json();
@@ -3168,6 +3188,12 @@ async function loadModelBroadcast() {
               + ' data-provider="' + esc(m.provider) + '" data-model="' + esc(m.model_id) + '"'
               + (m.on ? ' checked' : '') + '></span></label>'
               + '<span style="font-family:ui-monospace,monospace; font-size:11.5px; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis;">' + esc(m.model_id) + '</span>'
+              + (m.via_ai_run ? '<span class="panel-tag" style="margin:0;" title="Served by Cloudflare /ai/run rather than the chat endpoint">/ai/run</span>' : '')
+              + '</div>'
+              + '<div style="font-size:10.5px; color:var(--text-muted); margin-top:3px;">'
+              + 'accepts ' + esc((m.accepts || ['text']).join(', '))
+              + ' &middot; returns ' + esc((m.produces || ['text']).join(', '))
+              + (m.fallback_for ? ' &middot; <b style="color:var(--accent);">fallback for ' + esc(m.fallback_for) + '</b>' : '')
               + '</div>'
               + '<div class="row" style="justify-content:flex-start; margin-top:8px; gap:6px;">'
               + '<input type="text" class="bc-alias" data-alias-for="' + esc(prov) + '|' + esc(m.model_id) + '"'
@@ -3249,6 +3275,93 @@ async function loadModelBroadcast() {
 function cssEscape(s) {
   if (window.CSS && CSS.escape) return CSS.escape(s);
   return String(s).replace(/["\\\\]/g, '\\\\$&');
+}
+
+/* ---------- Modality routing ----------
+   The auto-routing switch and the per-modality fallback pickers. Without the
+   pickers the switch would be a switch to nothing: auto-routing only ever
+   forwards to a model the operator PUBLISHED as that modality's fallback, so
+   it has to be settable from the same place. */
+async function loadModalityRouting() {
+  const box = document.getElementById('rtFallbacks');
+  const sw = document.getElementById('cfgAutoRoute');
+  if (!box || !sw) return;
+  let d;
+  try {
+    d = await routerGet('/v1/config');
+  } catch (e) {
+    box.innerHTML = '<span style="color:var(--warn);">' + esc(String(e.message || e)) + '</span>';
+    return;
+  }
+  sw.checked = d.auto_route_modality === true;
+
+  let b;
+  try {
+    b = await routerGet('/v1/broadcast');
+  } catch {
+    box.innerHTML = '<span style="color:var(--warn);">Could not list models.</span>';
+    return;
+  }
+
+  // Only models that actually take the medium are offered. Listing a
+  // text-only model as a vision fallback would reproduce the original bug at
+  // the point of the fix.
+  const MODALITIES = ['image', 'audio'];
+  box.innerHTML = MODALITIES.map(function (mod) {
+    const capable = b.models.filter(function (m) { return (m.accepts || []).indexOf(mod) >= 0; });
+    const current = b.advertised.find(function (a) { return a.fallback_for === mod; });
+    const opts = ['<option value="">(none &mdash; requests will be refused)</option>']
+      .concat(capable.map(function (m) {
+        return '<option value="' + esc(m.provider + '|' + m.model_id) + '"'
+          + (current && current.alias === (m.alias || '') ? ' selected' : '')
+          + '>' + esc(m.model_id) + '</option>';
+      })).join('');
+    return '<div style="display:flex; gap:8px; align-items:center; padding:4px 0;">'
+      + '<span style="min-width:70px;">' + mod + '</span>'
+      + '<select data-fallback-for="' + mod + '" style="flex:1; font-size:11.5px;">' + opts + '</select>'
+      + '<button class="btn" data-save-fallback="' + mod + '"'
+      + (current ? ' title="currently ' + esc(current.alias) + '"' : '') + '>Set</button>'
+      + (current ? ' <span class="panel-tag" style="margin:0;">' + esc(current.alias) + '</span>' : '')
+      + '</div>';
+  }).join('') + (MODALITIES.every(function (m) {
+    return b.models.filter(function (x) { return (x.accepts || []).indexOf(m) >= 0; }).length === 0;
+  }) ? '<div style="color:var(--warn); margin-top:6px;">No registered model accepts image or audio. Run discovery first.</div>' : '');
+
+  sw.onchange = async function () {
+    const r = await routerCall('POST', '/v1/config', { auto_route_modality: sw.checked });
+    if (!r.ok) {
+      sw.checked = !sw.checked;
+      alert('Could not change auto-routing: ' + ((r.body && r.body.message) || r.status));
+      return;
+    }
+    flashSave(sw.checked
+      ? 'Auto-routing on. Media that the chosen model cannot take is forwarded to your fallback.'
+      : 'Auto-routing off. Media the chosen model cannot take is refused with the list of models that can.');
+  };
+
+  box.querySelectorAll('button[data-save-fallback]').forEach(function (btn) {
+    btn.addEventListener('click', async function () {
+      const mod = btn.dataset.saveFallback;
+      const sel = box.querySelector('select[data-fallback-for="' + mod + '"]');
+      const val = sel.value;
+      if (!val) {
+        alert('Pick a model, or clear the selection and press Set to remove the fallback.');
+        return;
+      }
+      const parts = val.split('|');
+      const b2 = await routerGet('/v1/broadcast');
+      const model = b2.models.find(function (m) { return m.model_id === parts[1] && m.provider === parts[0]; });
+      if (!model) { alert('That model is no longer registered.'); return; }
+      const r = await routerCall('POST', '/v1/broadcast', {
+        provider: parts[0], model_id: parts[1], on: true,
+        alias: (model.alias && model.alias.trim()) ? model.alias : 'nanites-' + mod,
+        fallback_for: mod,
+      });
+      if (!r.ok) { alert('Could not set the fallback: ' + ((r.body && r.body.message) || r.status)); return; }
+      flashSave(mod + ' fallback set to "' + (r.body.alias || '') + '".');
+      loadModalityRouting();
+    });
+  });
 }
 
 async function loadAliases() {
