@@ -38,11 +38,12 @@ async function harness() {
   return handle;
 }
 
-async function call(h: StartedRouter, method: string, path: string, body?: unknown) {
+async function call(h: StartedRouter, method: string, path: string, body?: unknown, extraHeaders: Record<string, string> = {}) {
   const res = await fetch(`http://127.0.0.1:${h.port}${path}`, {
     method,
     headers: {
       authorization: `Bearer ${h.deps.generatedKey}`,
+      ...extraHeaders,
       ...(body === undefined ? {} : { "content-type": "application/json" }),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -315,5 +316,57 @@ describe("the advertised list is the ONLY nomenclature a harness sees", () => {
     // is worse than one that was never on, because the UI says otherwise.
     expect(listAdvertised(h.deps.db)).toHaveLength(0);
     expect((await call(h, "GET", "/v1/models")).body.data).toHaveLength(0);
+  });
+});
+
+describe("chains appear in the catalog as models", () => {
+  // A harness builds its model picker from /v1/models. A chain is a real
+  // callable name with a sticky winner and failover, so hiding it meant the
+  // user had to know a name the catalog never mentioned.
+  it("lists a chain with kind=chain and its size, in BOTH dialects", async () => {
+    const h = await harness();
+    await call(h, "POST", "/v1/aliases", {
+      alias: "nanites-fast",
+      candidates: MODELS.map((model_id) => ({ provider: "cloudflare", model_id })),
+    });
+    await call(h, "POST", "/v1/broadcast", {
+      provider: "cloudflare", model_id: MODELS[0], on: true, alias: "nanites-one",
+    });
+
+    const openai = await call(h, "GET", "/v1/models");
+    const chain = openai.body.data.find((m: any) => m.id === "nanites-fast");
+    expect(chain).toBeTruthy();
+    expect(chain.capabilities.kind).toBe("chain");
+    expect(chain.capabilities.chain_size).toBe(2);
+    // The flat model stays a plain model.
+    expect(openai.body.data.find((m: any) => m.id === "nanites-one").capabilities.kind).toBe("model");
+
+    const anthropic = await call(h, "GET", "/v1/models", undefined, { "anthropic-version": "2023-06-01" });
+    const aChain = anthropic.body.data.find((m: any) => m.id === "nanites-fast");
+    expect(aChain.kind).toBe("chain");
+    expect(aChain.chain_size).toBe(2);
+  });
+
+  it("does NOT put kind at the top level of an OpenAI entry", async () => {
+    // A strict client rejects unknown top-level properties. The marker rides
+    // inside `capabilities`, which already exists.
+    const h = await harness();
+    await call(h, "POST", "/v1/aliases", {
+      alias: "nanites-fast",
+      candidates: [{ provider: "cloudflare", model_id: MODELS[0] }],
+    });
+    const m = (await call(h, "GET", "/v1/models")).body.data.find((x: any) => x.id === "nanites-fast");
+    expect(m.kind).toBeUndefined();
+    expect(m.capabilities).toBeTruthy();
+  });
+
+  it("a chain name resolves, and the chain wins over a flat lookup", async () => {
+    const h = await harness();
+    await call(h, "POST", "/v1/aliases", {
+      alias: "nanites-fast",
+      candidates: MODELS.map((model_id) => ({ provider: "cloudflare", model_id })),
+    });
+    const { getAlias } = await import("../../src/router/models/aliases.js");
+    expect(getAlias(h.deps.db, "nanites-fast")).toBeTruthy();
   });
 });

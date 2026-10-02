@@ -18,6 +18,7 @@ import { ProviderModelStore } from "../../storage/providerModelStore.js";
 import { nowIso } from "../../storage/db.js";
 import { routerProfile } from "../constants.js";
 import type { Modality } from "../ir/types.js";
+import type { ChainCandidate } from "./aliases.js";
 
 export interface AdvertisedModel {
   /** The harness-safe name. This is what a client sees and sends back. */
@@ -28,6 +29,14 @@ export interface AdvertisedModel {
   modalities: Modality[];
   context_window: number | null;
   created_at: string;
+  /**
+   * "model" is a single backing model. "chain" is an ordered list that may
+   * serve a different model on the next call. Optional so stored rows written
+   * before the field existed still read as plain models.
+   */
+  kind?: "model" | "chain";
+  /** Candidates, when this is a chain. Not persisted. */
+  chain?: ChainCandidate[];
 }
 
 interface AdvertisedRow {
@@ -138,7 +147,14 @@ export function renderOpenAiCatalog(models: AdvertisedModel[]): Record<string, u
       created: 0,
       owned_by: "nanites-router",
       context_length: m.context_window ?? 0,
-      capabilities: { modalities: m.modalities },
+      capabilities: {
+        modalities: m.modalities,
+        // "chain" is not an OpenAI field, so it rides inside the existing
+        // capabilities object rather than at the top level, which a strict
+        // client would reject as an unknown property.
+        kind: m.kind ?? "model",
+        ...(m.chain ? { chain_size: m.chain.length } : {}),
+      },
     })),
   };
 }
@@ -151,6 +167,8 @@ export function renderAnthropicCatalog(models: AdvertisedModel[]): Record<string
       id: m.alias,
       display_name: m.alias,
       created_at: m.created_at,
+      kind: m.kind ?? "model",
+      ...(m.chain ? { chain_size: m.chain.length } : {}),
     })),
     has_more: false,
     first_id: models[0]?.alias ?? null,

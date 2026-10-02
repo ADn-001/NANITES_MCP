@@ -929,6 +929,26 @@ async function handle(
     // picker with ids the operator never chose to expose.
     const advertised = listAdvertised(opts.db);
     const hStatus = helperStatus(opts.db);
+
+    // Chains appear as single models. A chain IS a callable name, and a
+    // harness cannot pick a resilience tier it was never told about.
+    //
+    // Marked with `router_chain` so the dashboard and any consumer can tell a
+    // chain from a flat model: a chain resolves to a DIFFERENT model per call
+    // once it starts failing over, which is the whole point and is worth
+    // surfacing rather than hiding.
+    const chainEntries: AdvertisedModel[] = listAliases(opts.db).map((a) => ({
+      alias: a.alias,
+      // A chain's "real" target is its current winner, or its first candidate
+      // before any request has been made.
+      real_id: a.candidates[a.sticky_winner ?? 0]?.model_id ?? "",
+      provider: a.candidates[0]?.provider ?? "",
+      modalities: ["text"],
+      context_window: null,
+      created_at: new Date(0).toISOString(),
+      kind: "chain" as const,
+      chain: a.candidates,
+    }));
     // Helpers are advertised ONLY when actually available. A model listed here
     // that turns out to be missing produces a request-time failure, which is
     // the exact confusion an advertised catalog exists to prevent.
@@ -946,7 +966,7 @@ async function handle(
         context_window: h.context_window,
         created_at: new Date(0).toISOString(),
       }));
-    sendJson(res, 200, renderCatalog([...advertised, ...helperModels], dialect));
+    sendJson(res, 200, renderCatalog([...advertised, ...chainEntries, ...helperModels], dialect));
     return;
   }
 
